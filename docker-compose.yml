@@ -35,19 +35,39 @@ services:
     ports: ["3000:3000"]
     depends_on: [prometheus]
 
+  migrate:
+    image: arigaio/atlas:latest
+    command: >-
+      migrate apply
+      --dir file:///migrations
+      --url postgres://forge:forge@postgres:5432/forge?sslmode=disable
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   forge-controlplane:
     build:
       context: .
       dockerfile: deploy/controlplane.Dockerfile
-    ports: ["8080:8080", "9090:9090"]
+    environment:
+      FORGE_DB_URL: postgres://forge:forge@postgres:5432/forge?sslmode=disable
+    ports: ["8080:8080", "8081:8081", "9090:9090"]
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   forge-worker:
     build:
       context: .
       dockerfile: deploy/worker.Dockerfile
+    environment:
+      FORGE_CONTROLPLANE_GRPC: forge-controlplane:8081
     ports: ["9091:9091"]
+    depends_on:
+      - forge-controlplane

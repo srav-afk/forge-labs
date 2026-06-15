@@ -4,6 +4,8 @@ package forge.registry.v1;
 
 option go_package = "github.com/srav-afk/forge-labs/gen/registry/v1;registryv1";
 
+import "google/protobuf/timestamp.proto";
+
 service RegistryService {
   rpc Register(RegisterRequest) returns (RegisterResponse);
 }
@@ -14,16 +16,24 @@ enum RuntimeKind {
   RUNTIME_KIND_MLX = 2;
   RUNTIME_KIND_LLAMACPP = 3;
   RUNTIME_KIND_VLLM = 4;
-  RUNTIME_KIND_FORGE_RUNTIME = 5;
+  RUNTIME_KIND_FORGE = 5;
+}
+
+message ServableModel {
+  string base_model = 1;
+  string adapter = 2;
+  uint32 max_context = 3;
 }
 
 message RegisterRequest {
   string worker_id = 1;
   string endpoint = 2;
   RuntimeKind runtime_kind = 3;
-  map<string, string> capabilities = 4;
+  repeated ServableModel models = 4;
+  map<string, string> capabilities = 5;
 }
 
 message RegisterResponse {
-  bool acknowledged = 1;
+  string worker_id = 1;
+  google.protobuf.Timestamp registered_at = 2;
 }

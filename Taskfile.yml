@@ -17,6 +17,16 @@ tasks:
     cmds:
       - go build ./...
 
+  migrate-diff:
+    desc: 'Generate a migration from the GORM models (usage: task migrate-diff -- <name>)'
+    cmds:
+      - atlas migrate diff {{.CLI_ARGS}} --env gorm
+
+  migrate:
+    desc: Apply migrations to the local Postgres
+    cmds:
+      - 'FORGE_DB_URL="${FORGE_DB_URL:-postgres://forge:forge@localhost:5432/forge?sslmode=disable}" atlas migrate apply --env gorm'
+
   up:
     desc: Bring up the full local stack
     deps: [gen]
