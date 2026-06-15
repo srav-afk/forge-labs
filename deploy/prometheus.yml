@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: forge-controlplane
+    static_configs:
+      - targets: ["forge-controlplane:9090"]
+  - job_name: forge-worker
+    static_configs:
+      - targets: ["forge-worker:9091"]

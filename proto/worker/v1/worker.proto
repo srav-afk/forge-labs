@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package forge.worker.v1;
+
+option go_package = "github.com/srav-afk/forge-labs/gen/worker/v1;workerv1";
+
+service WorkerService {
+  rpc Generate(GenerateRequest) returns (stream TokenChunk);
+}
+
+message ModelRef {
+  string base_model = 1;
+  optional string adapter = 2;
+}
+
+message SamplingParams {
+  float temperature = 1;
+  int32 top_k = 2;
+  float top_p = 3;
+  int32 max_tokens = 4;
+}
+
+message GenerateRequest {
+  ModelRef model = 1;
+  string prompt = 2;
+  SamplingParams sampling = 3;
+}
+
+message TokenChunk {
+  string text = 1;
+  bool done = 2;
+  string finish_reason = 3;
+  Usage usage = 4;
+}
+
+message Usage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int64 total_duration_ns = 3;
+}

@@ -1,0 +1,34 @@
+version: '3'
+
+tasks:
+  gen:
+    desc: Generate Go code from proto with buf
+    cmds:
+      - buf generate
+
+  lint:
+    desc: Lint proto contracts
+    cmds:
+      - buf lint
+
+  build:
+    desc: Build both binaries
+    deps: [gen]
+    cmds:
+      - go build ./...
+
+  up:
+    desc: Bring up the full local stack
+    deps: [gen]
+    cmds:
+      - docker compose up -d --build
+
+  down:
+    desc: Tear down the local stack
+    cmds:
+      - docker compose down
+
+  ps:
+    desc: Show stack status
+    cmds:
+      - docker compose ps

@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package forge.scheduler.v1;
+
+option go_package = "github.com/srav-afk/forge-labs/gen/scheduler/v1;schedulerv1";
+
+message Candidate {
+  string worker_id = 1;
+  int32 queue_depth = 2;
+  double latency_ewma_ms = 3;
+  double cost_per_hour = 4;
+}
+
+message Placement {
+  string worker_id = 1;
+  double score = 2;
+}
