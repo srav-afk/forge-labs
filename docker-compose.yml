@@ -13,6 +13,9 @@ services:
 
   redis:
     image: redis:8.6.2-alpine
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - ./deploy/redis.conf:/usr/local/etc/redis/redis.conf:ro
     ports: ["6379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -53,6 +56,7 @@ services:
       dockerfile: deploy/controlplane.Dockerfile
     environment:
       FORGE_DB_URL: postgres://forge:forge@postgres:5432/forge?sslmode=disable
+      FORGE_REDIS_URL: redis://redis:6379/0
     ports: ["8080:8080", "8081:8081", "9090:9090"]
     depends_on:
       postgres:
@@ -68,6 +72,7 @@ services:
       dockerfile: deploy/worker.Dockerfile
     environment:
       FORGE_CONTROLPLANE_GRPC: forge-controlplane:8081
+      FORGE_REDIS_URL: redis://redis:6379/0
     ports: ["9091:9091"]
     depends_on:
       - forge-controlplane

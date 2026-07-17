@@ -1,13 +1,19 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/knadh/koanf/v2"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/dig"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -17,6 +23,8 @@ import (
 	"github.com/srav-afk/forge-labs/internal/config"
 	"github.com/srav-afk/forge-labs/internal/db"
 	"github.com/srav-afk/forge-labs/internal/observability"
+	"github.com/srav-afk/forge-labs/internal/redisx"
+	"github.com/srav-afk/forge-labs/services/health"
 	"github.com/srav-afk/forge-labs/services/registry"
 	registryimpl "github.com/srav-afk/forge-labs/services/registry/impl"
 )
@@ -32,14 +40,29 @@ func main() {
 	must(c.Provide(func(k *koanf.Koanf) (*gorm.DB, error) {
 		return db.NewGorm(k.String("db.url"))
 	}))
+	must(c.Provide(func(k *koanf.Koanf) (*redis.Client, error) {
+		return redisx.NewClient(k.String("redis.url"))
+	}))
 	must(c.Provide(registry.NewWorkerRepository))
 	must(c.Provide(registryimpl.NewRegistryService))
 	must(c.Provide(observability.NewRegistry))
+	must(c.Provide(health.NewMetrics))
+	must(c.Provide(func(rdb *redis.Client, m *health.Metrics, k *koanf.Koanf) *health.Service {
+		return health.NewService(rdb, m, config.Duration(k, "heartbeat.reconcile", 3*time.Second))
+	}))
 
 	must(c.Invoke(run))
 }
 
-func run(k *koanf.Koanf, reg *observability.Registry, svc registry.RegistryService) error {
+func run(
+	k *koanf.Koanf,
+	reg *observability.Registry,
+	svc registry.RegistryService,
+	healthSvc *health.Service,
+	rdb *redis.Client,
+) error {
+	defer rdb.Close()
+
 	buildInfo := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "forge_controlplane_build_info",
 		Help: "Control plane build metadata, always 1.",
@@ -47,9 +70,26 @@ func run(k *koanf.Koanf, reg *observability.Registry, svc registry.RegistryServi
 	reg.MustRegister(buildInfo)
 	buildInfo.WithLabelValues(version).Set(1)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	healthSvc.Start(ctx)
+
 	go serveMetrics(k.String("metrics.addr"), reg)
 	go serveGRPC(k.String("grpc.addr"), svc)
-	return serveHTTP(k.String("http.addr"))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- serveHTTP(k.String("http.addr"))
+	}()
+
+	select {
+	case <-ctx.Done():
+		log.Printf("controlplane shutting down")
+		return nil
+	case err := <-errCh:
+		return err
+	}
 }
 
 func serveMetrics(addr string, reg *observability.Registry) {

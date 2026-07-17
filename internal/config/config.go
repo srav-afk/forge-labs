@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strings"
+	"time"
 
 	"github.com/knadh/koanf/parsers/dotenv"
 	"github.com/knadh/koanf/providers/confmap"
@@ -31,4 +32,24 @@ func Load(defaults map[string]any) *koanf.Koanf {
 
 func normalizeKey(s string) string {
 	return strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(s, "FORGE_")), "_", ".")
+}
+
+func Duration(k *koanf.Koanf, key string, fallback time.Duration) time.Duration {
+	raw := k.String(key)
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return fallback
+	}
+	return d
+}
+
+func RuntimeLabel(kind string) string {
+	const prefix = "RUNTIME_KIND_"
+	if strings.HasPrefix(kind, prefix) {
+		return strings.ToLower(strings.TrimPrefix(kind, prefix))
+	}
+	return strings.ToLower(kind)
 }

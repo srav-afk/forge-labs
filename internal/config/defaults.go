@@ -2,10 +2,12 @@ package config
 
 func ControlPlaneDefaults() map[string]any {
 	return map[string]any{
-		"http.addr":    ":8080",
-		"metrics.addr": ":9090",
-		"grpc.addr":    ":8081",
-		"db.url":       "postgres://forge:forge@localhost:5432/forge?sslmode=disable",
+		"http.addr":           ":8080",
+		"metrics.addr":        ":9090",
+		"grpc.addr":           ":8081",
+		"db.url":              "postgres://forge:forge@localhost:5432/forge?sslmode=disable",
+		"redis.url":           "redis://localhost:6379/0",
+		"heartbeat.reconcile": "3s",
 	}
 }
 
@@ -13,11 +15,15 @@ func WorkerDefaults() map[string]any {
 	return map[string]any{
 		"metrics.addr":         ":9091",
 		"controlplane.grpc":    "localhost:8081",
+		"redis.url":            "redis://localhost:6379/0",
+		"heartbeat.interval":   "2s",
+		"heartbeat.ttl":        "6s",
 		"worker.id":            "mac-studio-01",
 		"worker.endpoint":      "127.0.0.1:50051",
 		"worker.runtime":       "RUNTIME_KIND_OLLAMA",
 		"worker.model.base":    "qwen3:8b",
 		"worker.model.context": 32768,
+		"worker.ready":         true,
 		"worker.capabilities": map[string]string{
 			"accelerator":    "apple-m3-pro",
 			"quantization":   "Q4_K_M",

@@ -4,6 +4,9 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/knadh/koanf/v2"
@@ -14,12 +17,42 @@ import (
 	registryv1 "github.com/srav-afk/forge-labs/gen/registry/v1"
 	"github.com/srav-afk/forge-labs/internal/config"
 	"github.com/srav-afk/forge-labs/internal/observability"
+	"github.com/srav-afk/forge-labs/internal/redisx"
+	"github.com/srav-afk/forge-labs/worker"
 )
 
 func main() {
 	cfg := config.Load(config.WorkerDefaults())
 
 	registerWithControlPlane(cfg)
+
+	rdb, err := redisx.NewClient(cfg.String("redis.url"))
+	if err != nil {
+		log.Fatalf("redis: %v", err)
+	}
+	defer rdb.Close()
+
+	var adapter *string
+	if a := cfg.String("worker.model.adapter"); a != "" {
+		adapter = &a
+	}
+
+	hb := worker.NewHeartbeatWriter(worker.HeartbeatWriterConfig{
+		RDB:       rdb,
+		ID:        cfg.String("worker.id"),
+		BaseModel: cfg.String("worker.model.base"),
+		Adapter:   adapter,
+		Runtime:   config.RuntimeLabel(cfg.String("worker.runtime")),
+		Addr:      cfg.String("worker.endpoint"),
+		TTL:       config.Duration(cfg, "heartbeat.ttl", 6*time.Second),
+		Interval:  config.Duration(cfg, "heartbeat.interval", 2*time.Second),
+		Ready:     cfg.Bool("worker.ready"),
+	})
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go hb.Run(ctx)
 
 	reg := observability.NewRegistry()
 	up := prometheus.NewGauge(prometheus.GaugeOpts{
@@ -29,11 +62,23 @@ func main() {
 	reg.MustRegister(up)
 	up.Set(1)
 
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", reg.Handler())
-	if err := http.ListenAndServe(cfg.String("metrics.addr"), mux); err != nil {
-		log.Fatalf("metrics server: %v", err)
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", reg.Handler())
+		if err := http.ListenAndServe(cfg.String("metrics.addr"), mux); err != nil {
+			log.Fatalf("metrics server: %v", err)
+		}
+	}()
+
+	log.Printf("worker %s heartbeating", cfg.String("worker.id"))
+	<-ctx.Done()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := hb.Delete(shutdownCtx); err != nil {
+		log.Printf("heartbeat delete on shutdown: %v", err)
 	}
+	log.Printf("worker shut down")
 }
 
 func registerWithControlPlane(cfg *koanf.Koanf) {
