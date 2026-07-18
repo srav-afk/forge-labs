@@ -41,6 +41,9 @@ func ControlPlaneDefaults() map[string]any {
 		"fleet.local.base.grpc.port":        50100,
 		"fleet.local.ollama.url":            "http://127.0.0.1:11434",
 		"gateway.api.key":                   "",
+		"gateway.api.keys":                  "",
+		"gateway.request.timeout":           "5m",
+		"gateway.max.body.bytes":            1048576,
 		"runpod.api.key":                    "",
 		"hf.token":                          "",
 	}

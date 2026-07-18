@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -238,6 +239,7 @@ func run(
 	svc registry.RegistryService,
 	healthSvc *health.Service,
 	rdb *redis.Client,
+	gdb *gorm.DB,
 	holder *routing.SnapshotHolder,
 	rm *routing.Metrics,
 	pub *routing.Publisher,
@@ -251,6 +253,7 @@ func run(
 	gw *gateway.Handler,
 ) error {
 	defer rdb.Close()
+	_ = gdb
 
 	tr, err := observability.NewTracer(observability.TraceConfig{
 		ServiceName:  "forge-controlplane",
@@ -294,7 +297,7 @@ func run(
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- serveHTTP(k.String("http.addr"), gw, cacheSvc, k.String("gateway.api.key"))
+		errCh <- serveHTTP(k, gw, cacheSvc, gdb)
 	}()
 
 	select {
@@ -328,11 +331,38 @@ func serveGRPC(addr string, svc registry.RegistryService) {
 	}
 }
 
-func serveHTTP(addr string, gw *gateway.Handler, cache *cacheregistry.Service, apiKey string) error {
+func serveHTTP(k *koanf.Koanf, gw *gateway.Handler, cache *cacheregistry.Service, gdb *gorm.DB) error {
+	addr := k.String("http.addr")
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(observability.GinMiddleware("forge-controlplane"))
+
+	keys := gateway.NewKeyStore(gdb)
+	keys.LoadFromEnv(k.String("gateway.api.keys"), k.String("gateway.api.key"))
+	_ = keys.Reload(context.Background())
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for range t.C {
+			_ = keys.Reload(context.Background())
+		}
+	}()
+
+	timeout := config.Duration(k, "gateway.request.timeout", 5*time.Minute)
+	maxBody := int64(k.Int("gateway.max.body.bytes"))
+	if maxBody <= 0 {
+		maxBody = 1 << 20
+	}
+	limits := gateway.GatewayLimits{
+		RequestTimeout: timeout,
+		MaxBodyBytes:   maxBody,
+		Keys:           keys,
+		Limiter:        gateway.NewConcurrencyLimiter(),
+		Logger:         slog.Default(),
+	}
+	r.Use(limits.Middleware())
+
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -354,30 +384,12 @@ func serveHTTP(addr string, gw *gateway.Handler, cache *cacheregistry.Service, a
 			c.JSON(http.StatusOK, gin.H{"ok": true})
 		})
 	}
-	if apiKey != "" {
-		r.Use(func(c *gin.Context) {
-			if c.Request.URL.Path == "/healthz" || c.Request.URL.Path == "/internal/cache/events" {
-				c.Next()
-				return
-			}
-			auth := c.GetHeader("Authorization")
-			got := ""
-			if len(auth) > 7 && (auth[:7] == "Bearer " || auth[:7] == "bearer ") {
-				got = auth[7:]
-			}
-			if got == "" {
-				got = c.GetHeader("X-API-Key")
-			}
-			if got != apiKey {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-					"error": gin.H{"message": "invalid api key", "type": "auth_error", "code": "unauthorized"},
-				})
-				return
-			}
-			c.Next()
-		})
-	}
 	gw.Register(r)
+	if keys.Required() {
+		log.Printf("gateway auth enabled (%d key source(s)); request timeout=%s max_body=%d", 1, timeout, maxBody)
+	} else {
+		log.Printf("gateway auth open (no keys configured); request timeout=%s max_body=%d", timeout, maxBody)
+	}
 	log.Printf("gateway http listening on %s", addr)
 	return r.Run(addr)
 }

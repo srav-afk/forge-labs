@@ -74,4 +74,26 @@ curl -s http://127.0.0.1:8080/v1/chat/completions \
   -d '{"model":"qwen3.5:0.8b","messages":[{"role":"user","content":"hi"}],"max_tokens":16}'
 ```
 
+## Gateway auth (optional)
+
+If any keys are configured, `/v1/*` requires auth. `/healthz` and `/internal/cache/events` stay open.
+
+```bash
+# single key
+export FORGE_GATEWAY_API_KEY=dev-secret
+
+# multiple: rawKey:clientId[:maxConcurrent]
+export FORGE_GATEWAY_API_KEYS=sk-alice:alice:8,sk-bob:bob:4
+```
+
+```bash
+curl -s http://127.0.0.1:8080/v1/models -H "Authorization: Bearer sk-alice"
+# response header: X-Request-Id
+```
+
+Limits (defaults): `FORGE_GATEWAY_REQUEST_TIMEOUT=5m`, `FORGE_GATEWAY_MAX_BODY_BYTES=1048576`.  
+Audit lines are JSON on stdout: `gateway_audit` with request_id, client_id, model, worker_id, latency, tokens, error.
+
+Keys can also live in Postgres table `gateway_api_keys` (hashed); env keys merge with DB on reload.
+
 See also [ops-lab.md](./ops-lab.md) for providers, RunPod, cache inject, and fleet flags.

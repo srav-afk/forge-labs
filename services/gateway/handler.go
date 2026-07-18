@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -30,6 +32,7 @@ type Handler struct {
 	failover       *reliability.Failover
 	activator      Activator
 	providers      ProviderLookup
+	logger         *slog.Logger
 	admissionLimit int64
 	retryAfterSec  int
 	maxAttempts    int
@@ -40,6 +43,7 @@ type HandlerConfig struct {
 	AdmissionLimit int
 	RetryAfterSec  int
 	MaxAttempts    int
+	Logger         *slog.Logger
 }
 
 func NewHandler(
@@ -59,6 +63,9 @@ func NewHandler(
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = 3
 	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	}
 	return &Handler{
 		selector:       selector,
 		inflight:       inflight,
@@ -66,6 +73,7 @@ func NewHandler(
 		metrics:        metrics,
 		failover:       failover,
 		activator:      noopActivator{},
+		logger:         cfg.Logger,
 		admissionLimit: int64(cfg.AdmissionLimit),
 		retryAfterSec:  cfg.RetryAfterSec,
 		maxAttempts:    cfg.MaxAttempts,
@@ -184,8 +192,29 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 	}
 
 	statusCode := http.StatusOK
+	auditWorker := ""
+	auditErr := ""
+	var auditUsage *usage
 	defer func() {
 		h.metrics.ObserveDuration("chat_completions", req.Model, req.Stream, statusCode, time.Since(start).Seconds())
+		client := ClientFromContext(c)
+		pt, ct := int32(0), int32(0)
+		if auditUsage != nil {
+			pt, ct = auditUsage.PromptTokens, auditUsage.CompletionTokens
+		}
+		LogAudit(h.logger, AuditEvent{
+			RequestID: RequestIDFromContext(c),
+			ClientID:  client.ClientID,
+			Route:     "chat_completions",
+			Model:     req.Model,
+			WorkerID:  auditWorker,
+			Stream:    req.Stream,
+			Status:    statusCode,
+			LatencyMs: auditLatency(start),
+			PromptTok: pt,
+			CompTok:   ct,
+			Error:     auditErr,
+		})
 	}()
 
 	routePrompt := messagesToPrompt(req.Messages)
@@ -200,6 +229,7 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 	}
 	if err != nil {
 		statusCode, typ, code := selectErrorStatus(err)
+		auditErr = err.Error()
 		if errors.Is(err, scheduler.ErrAdmissionRejected) {
 			h.metrics.IncRejected(req.Model, "fleet_saturated")
 			writeAdmissionRejected(c, h.retryAfterSec)
@@ -215,6 +245,7 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 	workers, done, ok := h.admitFromRanked(workers)
 	if !ok {
 		statusCode = http.StatusTooManyRequests
+		auditErr = "fleet_saturated"
 		h.metrics.IncRejected(req.Model, "fleet_saturated")
 		writeAdmissionRejected(c, h.retryAfterSec)
 		return
@@ -229,9 +260,11 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 	if req.Stream {
 		worker, err := h.streamChatFailover(c, workers, genReq, req.Model, includeUsage, start)
 		if worker != nil {
+			auditWorker = worker.ID
 			h.observeLatency(worker.ID, start)
 		}
 		if err != nil {
+			auditErr = err.Error()
 			if !c.Writer.Written() {
 				httpStatus, msg, typ, code := mapGRPCError(err)
 				statusCode = httpStatus
@@ -243,9 +276,14 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 
 	text, usage, finish, worker, err := h.collectWithFailover(c.Request.Context(), workers, genReq)
 	if worker != nil {
+		auditWorker = worker.ID
 		h.observeLatency(worker.ID, start)
 	}
+	if usage != nil {
+		auditUsage = usage
+	}
 	if err != nil {
+		auditErr = err.Error()
 		httpStatus, msg, typ, code := mapGRPCError(err)
 		statusCode = httpStatus
 		writeOpenAIError(c, httpStatus, msg, typ, code)
