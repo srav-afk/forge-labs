@@ -25,6 +25,7 @@ import (
 	"github.com/srav-afk/forge-labs/internal/observability"
 	"github.com/srav-afk/forge-labs/internal/redisx"
 	"github.com/srav-afk/forge-labs/services/catalog"
+	"github.com/srav-afk/forge-labs/services/fleet"
 	"github.com/srav-afk/forge-labs/services/gateway"
 	"github.com/srav-afk/forge-labs/services/gateway/reliability"
 	"github.com/srav-afk/forge-labs/services/health"
@@ -175,6 +176,28 @@ func main() {
 			},
 		)
 	}))
+	must(c.Provide(fleet.NewPolicyCache))
+	must(c.Provide(func(k *koanf.Koanf) fleet.Provisioner {
+		if k.Bool("fleet.runpod.enabled") {
+			return fleet.NewRunPodProvisioner(true)
+		}
+		return fleet.NewLocalProcess()
+	}))
+	must(c.Provide(func(reg *observability.Registry) *fleet.Metrics {
+		return fleet.NewMetrics(reg)
+	}))
+	must(c.Provide(func(
+		pol *fleet.PolicyCache,
+		prov fleet.Provisioner,
+		holder *routing.SnapshotHolder,
+		rdb *redis.Client,
+		fm *fleet.Metrics,
+	) *fleet.Manager {
+		return fleet.NewManager(pol, prov, holder, rdb, fm)
+	}))
+	must(c.Provide(func(mgr *fleet.Manager) gateway.Activator {
+		return mgr
+	}))
 
 	must(c.Invoke(run))
 }
@@ -191,6 +214,8 @@ func run(
 	catalogSvc *catalog.Service,
 	plannerSvc *planner.Service,
 	policyHolder *routing.PolicyHolder,
+	fleetMgr *fleet.Manager,
+	activator gateway.Activator,
 	gw *gateway.Handler,
 ) error {
 	defer rdb.Close()
@@ -222,6 +247,8 @@ func run(
 	healthSvc.Start(ctx)
 	catalogSvc.Start(ctx)
 	plannerSvc.Start(ctx)
+	fleetMgr.Start(ctx)
+	gw.SetActivator(activator)
 	go routing.RunSubscriber(ctx, rdb, holder, rm)
 	go routing.RunPolicySubscriber(ctx, rdb, policyHolder)
 	pub.Start(ctx)

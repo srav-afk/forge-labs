@@ -30,6 +30,7 @@ type Handler struct {
 	latency        *scheduler.LatencyStore
 	metrics        *Metrics
 	failover       *reliability.Failover
+	activator      Activator
 	admissionLimit int64
 	retryAfterSec  int
 	maxAttempts    int
@@ -65,10 +66,17 @@ func NewHandler(
 		latency:        latency,
 		metrics:        metrics,
 		failover:       failover,
+		activator:      noopActivator{},
 		admissionLimit: int64(cfg.AdmissionLimit),
 		retryAfterSec:  cfg.RetryAfterSec,
 		maxAttempts:    cfg.MaxAttempts,
 		dial:           dialWorker,
+	}
+}
+
+func (h *Handler) SetActivator(a Activator) {
+	if a != nil {
+		h.activator = a
 	}
 }
 
@@ -115,6 +123,19 @@ func dialWorker(ctx context.Context, endpoint string) (workerv1.WorkerServiceCli
 	return workerv1.NewWorkerServiceClient(conn), func() { _ = conn.Close() }, nil
 }
 
+func (h *Handler) tryActivate(ctx context.Context, model string) bool {
+	if h.activator == nil || !h.activator.NeedsActivation(model) {
+		return false
+	}
+	actx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := h.activator.Activate(actx, model); err != nil {
+		return false
+	}
+	_, err := waitForCapacity(actx, h.selector, model, "", 5*time.Second)
+	return err == nil
+}
+
 func (h *Handler) listModels(c *gin.Context) {
 	c.JSON(http.StatusOK, modelsResponse{
 		Object: "list",
@@ -149,6 +170,11 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 	}
 	workers, err := h.rankWorkers(req.Model, routePrompt)
 	if err != nil {
+		if h.tryActivate(c.Request.Context(), req.Model) {
+			workers, err = h.rankWorkers(req.Model, routePrompt)
+		}
+	}
+	if err != nil {
 		statusCode, typ, code := selectErrorStatus(err)
 		if errors.Is(err, scheduler.ErrAdmissionRejected) {
 			h.metrics.IncRejected(req.Model, "fleet_saturated")
@@ -162,7 +188,6 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		return
 	}
 
-	// admit against preferred worker slot; failover keeps using same accounting on success path
 	done, ok := h.tryAdmit(workers[0].ID)
 	if !ok {
 		statusCode = http.StatusTooManyRequests

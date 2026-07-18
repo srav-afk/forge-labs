@@ -10,6 +10,7 @@ type Worker struct {
 	ID           string          `gorm:"primaryKey"`
 	Endpoint     string          `gorm:"not null"`
 	RuntimeKind  string          `gorm:"index;not null"`
+	State        string          `gorm:"index;not null;default:ready"`
 	Capabilities datatypes.JSON  `gorm:"type:jsonb"`
 	Models       []ServableModel `gorm:"foreignKey:WorkerID;constraint:OnDelete:CASCADE"`
 	RegisteredAt time.Time

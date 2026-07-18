@@ -27,6 +27,7 @@ func ControlPlaneDefaults() map[string]any {
 		"reliability.breaker.min.requests":  10,
 		"otlp.endpoint":                     "localhost:4317",
 		"trace.sample.ratio":                1.0,
+		"fleet.runpod.enabled":              false,
 	}
 }
 
