@@ -34,6 +34,15 @@ func (s *AffinityScorer) Prepare(_ context.Context, req *Request, candidates []C
 	}
 	ids := make([]string, 0, len(candidates))
 	for _, c := range candidates {
+		if c.Capabilities != nil && c.Capabilities["no_local_kv"] == "true" {
+			continue
+		}
+		if c.Capabilities != nil && c.Capabilities["provider"] == "true" {
+			continue
+		}
+		if c.Runtime == "provider" {
+			continue
+		}
 		ids = append(ids, c.WorkerID)
 	}
 	key := PrefixKey(prompt, s.Window, s.BlockBytes)

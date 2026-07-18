@@ -31,6 +31,7 @@ type Handler struct {
 	metrics        *Metrics
 	failover       *reliability.Failover
 	activator      Activator
+	providers      ProviderLookup
 	admissionLimit int64
 	retryAfterSec  int
 	maxAttempts    int
@@ -78,6 +79,10 @@ func (h *Handler) SetActivator(a Activator) {
 	if a != nil {
 		h.activator = a
 	}
+}
+
+func (h *Handler) SetProviders(p ProviderLookup) {
+	h.providers = p
 }
 
 func (h *Handler) observeLatency(workerID string, started time.Time) {

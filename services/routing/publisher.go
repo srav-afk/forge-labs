@@ -13,12 +13,17 @@ import (
 	"github.com/srav-afk/forge-labs/services/registry"
 )
 
+type VirtualWorkerSource interface {
+	SnapshotViews() []WorkerView
+}
+
 type Publisher struct {
 	rdb      *redis.Client
 	repo     registry.WorkerRepository
 	health   *health.Service
 	holder   *SnapshotHolder
 	metrics  *Metrics
+	virtual  VirtualWorkerSource
 	interval time.Duration
 	epoch    atomic.Uint64
 }
@@ -42,6 +47,10 @@ func NewPublisher(
 		metrics:  metrics,
 		interval: interval,
 	}
+}
+
+func (p *Publisher) SetVirtualSource(v VirtualWorkerSource) {
+	p.virtual = v
 }
 
 func (p *Publisher) Start(ctx context.Context) {
@@ -153,6 +162,10 @@ func (p *Publisher) buildSnapshot(ctx context.Context) (*RoutingSnapshot, error)
 				Capabilities: caps.Raw,
 			})
 		}
+	}
+
+	if p.virtual != nil {
+		views = append(views, p.virtual.SnapshotViews()...)
 	}
 
 	return &RoutingSnapshot{

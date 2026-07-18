@@ -30,6 +30,7 @@ import (
 	"github.com/srav-afk/forge-labs/services/gateway/reliability"
 	"github.com/srav-afk/forge-labs/services/health"
 	"github.com/srav-afk/forge-labs/services/planner"
+	"github.com/srav-afk/forge-labs/services/provider"
 	"github.com/srav-afk/forge-labs/services/registry"
 	registryimpl "github.com/srav-afk/forge-labs/services/registry/impl"
 	"github.com/srav-afk/forge-labs/services/routing"
@@ -198,6 +199,7 @@ func main() {
 	must(c.Provide(func(mgr *fleet.Manager) gateway.Activator {
 		return mgr
 	}))
+	must(c.Provide(provider.NewRegistry))
 
 	must(c.Invoke(run))
 }
@@ -216,6 +218,7 @@ func run(
 	policyHolder *routing.PolicyHolder,
 	fleetMgr *fleet.Manager,
 	activator gateway.Activator,
+	providers *provider.Registry,
 	gw *gateway.Handler,
 ) error {
 	defer rdb.Close()
@@ -248,7 +251,10 @@ func run(
 	catalogSvc.Start(ctx)
 	plannerSvc.Start(ctx)
 	fleetMgr.Start(ctx)
+	providers.Start(ctx)
+	pub.SetVirtualSource(providers)
 	gw.SetActivator(activator)
+	gw.SetProviders(providers)
 	go routing.RunSubscriber(ctx, rdb, holder, rm)
 	go routing.RunPolicySubscriber(ctx, rdb, policyHolder)
 	pub.Start(ctx)

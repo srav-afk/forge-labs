@@ -57,6 +57,9 @@ func (h *Handler) collectWithFailover(ctx context.Context, workers []SelectedWor
 }
 
 func (h *Handler) openGenerate(ctx context.Context, worker *SelectedWorker, genReq *workerv1.GenerateRequest) (workerv1.WorkerService_GenerateClient, func(), error) {
+	if worker != nil && isProviderEndpoint(worker.Endpoint) {
+		return h.openProviderStream(ctx, worker, genReq)
+	}
 	client, closer, err := h.dial(ctx, worker.Endpoint)
 	if err != nil {
 		return nil, nil, status.Errorf(codes.Unavailable, "dial worker: %v", err)
