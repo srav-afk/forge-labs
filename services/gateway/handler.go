@@ -111,6 +111,27 @@ func (h *Handler) tryAdmit(workerID string) (func(), bool) {
 	}, true
 }
 
+func (h *Handler) admitFromRanked(workers []SelectedWorker) ([]SelectedWorker, func(), bool) {
+	if len(workers) == 0 {
+		return nil, nil, false
+	}
+	if h.inflight == nil {
+		return workers, func() {}, true
+	}
+	for i, w := range workers {
+		done, ok := h.tryAdmit(w.ID)
+		if !ok {
+			continue
+		}
+		ordered := make([]SelectedWorker, 0, len(workers))
+		ordered = append(ordered, w)
+		ordered = append(ordered, workers[:i]...)
+		ordered = append(ordered, workers[i+1:]...)
+		return ordered, done, true
+	}
+	return nil, nil, false
+}
+
 func (h *Handler) Register(r *gin.Engine) {
 	r.POST("/v1/chat/completions", h.chatCompletions)
 	r.POST("/v1/completions", h.completions)
@@ -193,7 +214,7 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		return
 	}
 
-	done, ok := h.tryAdmit(workers[0].ID)
+	workers, done, ok := h.admitFromRanked(workers)
 	if !ok {
 		statusCode = http.StatusTooManyRequests
 		h.metrics.IncRejected(req.Model, "fleet_saturated")
@@ -289,7 +310,7 @@ func (h *Handler) completions(c *gin.Context) {
 		writeOpenAIError(c, statusCode, err.Error(), typ, code)
 		return
 	}
-	done, ok := h.tryAdmit(workers[0].ID)
+	workers, done, ok := h.admitFromRanked(workers)
 	if !ok {
 		statusCode = http.StatusTooManyRequests
 		h.metrics.IncRejected(req.Model, "fleet_saturated")
