@@ -2,17 +2,19 @@ package config
 
 func ControlPlaneDefaults() map[string]any {
 	return map[string]any{
-		"http.addr":                 ":8080",
-		"metrics.addr":              ":9090",
-		"grpc.addr":                 ":8081",
-		"db.url":                    "postgres://forge:forge@localhost:5432/forge?sslmode=disable",
-		"redis.url":                 "redis://localhost:6379/0",
-		"heartbeat.reconcile":       "3s",
-		"routing.snapshot.interval": "500ms",
-		"scheduler.weight.load":     0.8,
-		"scheduler.weight.latency":  0.2,
-		"scheduler.latency.ref.ms":  100.0,
-		"scheduler.ewma.tau":        "10s",
+		"http.addr":                     ":8080",
+		"metrics.addr":                  ":9090",
+		"grpc.addr":                     ":8081",
+		"db.url":                        "postgres://forge:forge@localhost:5432/forge?sslmode=disable",
+		"redis.url":                     "redis://localhost:6379/0",
+		"heartbeat.reconcile":           "3s",
+		"routing.snapshot.interval":     "500ms",
+		"scheduler.weight.load":         0.8,
+		"scheduler.weight.latency":      0.2,
+		"scheduler.latency.ref.ms":      100.0,
+		"scheduler.ewma.tau":            "10s",
+		"admission.per.worker.limit":    4,
+		"admission.retry.after.seconds": 2,
 	}
 }
 

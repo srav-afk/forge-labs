@@ -54,3 +54,22 @@ func (t *InflightTracker) Track(workerID string) (done func()) {
 		once.Do(func() { t.Dec(workerID) })
 	}
 }
+
+func (t *InflightTracker) TryTrack(workerID string, limit int64) (done func(), ok bool) {
+	if limit <= 0 {
+		return t.Track(workerID), true
+	}
+	c := t.counter(workerID)
+	for {
+		cur := c.Load()
+		if cur >= limit {
+			return nil, false
+		}
+		if c.CompareAndSwap(cur, cur+1) {
+			var once sync.Once
+			return func() {
+				once.Do(func() { t.Dec(workerID) })
+			}, true
+		}
+	}
+}

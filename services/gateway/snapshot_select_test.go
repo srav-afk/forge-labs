@@ -10,7 +10,7 @@ import (
 )
 
 func newTestSelector(h *routing.SnapshotHolder) *SnapshotSelector {
-	return NewSnapshotSelector(h, routing.NewInflightTracker(), scheduler.NewLatencyStore(10*time.Second, nil), scheduler.DefaultChain(), nil)
+	return NewSnapshotSelector(h, routing.NewInflightTracker(), scheduler.NewLatencyStore(10*time.Second, nil), scheduler.DefaultChain(), nil, 4)
 }
 
 func TestSnapshotSelectorNoSnapshot(t *testing.T) {
@@ -82,7 +82,7 @@ func TestSnapshotSelectorPrefersLowerEWMA(t *testing.T) {
 	// first observe seeds
 	store.Observe("slow", 400)
 	store.Observe("fast", 40)
-	s := NewSnapshotSelector(h, routing.NewInflightTracker(), store, scheduler.DefaultChain(), nil)
+	s := NewSnapshotSelector(h, routing.NewInflightTracker(), store, scheduler.DefaultChain(), nil, 4)
 	w, err := s.SelectWorker("m")
 	if err != nil {
 		t.Fatal(err)

@@ -10,17 +10,15 @@ import (
 	"github.com/srav-afk/forge-labs/services/scheduler"
 )
 
-var (
-	ErrNoSnapshot = errors.New("no snapshot yet")
-	errNoCapacity = scheduler.ErrNoCapacity
-)
+var ErrNoSnapshot = errors.New("no snapshot yet")
 
 type SnapshotSelector struct {
-	holder   *routing.SnapshotHolder
-	inflight *routing.InflightTracker
-	latency  *scheduler.LatencyStore
-	chain    *scheduler.Chain
-	metrics  *scheduler.Metrics
+	holder         *routing.SnapshotHolder
+	inflight       *routing.InflightTracker
+	latency        *scheduler.LatencyStore
+	chain          *scheduler.Chain
+	metrics        *scheduler.Metrics
+	admissionLimit int64
 }
 
 func NewSnapshotSelector(
@@ -29,13 +27,15 @@ func NewSnapshotSelector(
 	latency *scheduler.LatencyStore,
 	chain *scheduler.Chain,
 	metrics *scheduler.Metrics,
+	admissionLimit int,
 ) *SnapshotSelector {
 	return &SnapshotSelector{
-		holder:   holder,
-		inflight: inflight,
-		latency:  latency,
-		chain:    chain,
-		metrics:  metrics,
+		holder:         holder,
+		inflight:       inflight,
+		latency:        latency,
+		chain:          chain,
+		metrics:        metrics,
+		admissionLimit: int64(admissionLimit),
 	}
 }
 
@@ -51,6 +51,9 @@ func (s *SnapshotSelector) SelectWorker(model string) (*SelectedWorker, error) {
 
 	pick, err := s.chain.PickWithMetrics(context.Background(), req, candidates, s.metrics)
 	if err != nil {
+		if errors.Is(err, scheduler.ErrAdmissionRejected) {
+			return nil, fmt.Errorf("%w: model %q", scheduler.ErrAdmissionRejected, model)
+		}
 		if errors.Is(err, scheduler.ErrNoCapacity) {
 			return nil, fmt.Errorf("%w: model %q", scheduler.ErrNoCapacity, model)
 		}
@@ -101,9 +104,6 @@ func (s *SnapshotSelector) ListModels() []modelObject {
 	return out
 }
 
-func (s *SnapshotSelector) ObserveLatency(workerID string, sampleMs float64) {
-	if s.latency == nil {
-		return
-	}
-	s.latency.Observe(workerID, sampleMs)
+func (s *SnapshotSelector) AdmissionLimit() int64 {
+	return s.admissionLimit
 }

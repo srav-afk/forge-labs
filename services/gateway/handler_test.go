@@ -67,7 +67,7 @@ func testHandler(t *testing.T, fw *fakeWorker) (*Handler, *httptest.Server) {
 	m := NewMetrics(reg)
 	inf := routing.NewInflightTracker()
 	lat := scheduler.NewLatencyStore(10*time.Second, nil)
-	h := NewHandler(staticSelector{w: &SelectedWorker{ID: "w1", Endpoint: "bufnet", Models: []string{"llama3.2"}}}, inf, lat, m)
+	h := NewHandler(staticSelector{w: &SelectedWorker{ID: "w1", Endpoint: "bufnet", Models: []string{"llama3.2"}}}, inf, lat, m, 8, 2)
 	h.dial = func(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error) {
 		conn, err := grpc.NewClient("passthrough:///bufnet",
 			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
@@ -184,7 +184,7 @@ func TestStreamCancelPropagates(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	reg := observability.NewRegistry()
-	h := NewHandler(staticSelector{w: &SelectedWorker{ID: "w1", Endpoint: "bufnet"}}, routing.NewInflightTracker(), scheduler.NewLatencyStore(10*time.Second, nil), NewMetrics(reg))
+	h := NewHandler(staticSelector{w: &SelectedWorker{ID: "w1", Endpoint: "bufnet"}}, routing.NewInflightTracker(), scheduler.NewLatencyStore(10*time.Second, nil), NewMetrics(reg), 8, 2)
 	h.dial = func(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error) {
 		conn, err := grpc.NewClient("passthrough:///bufnet",
 			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),

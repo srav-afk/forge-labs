@@ -23,11 +23,13 @@ import (
 )
 
 type Handler struct {
-	selector WorkerSelector
-	inflight *routing.InflightTracker
-	latency  *scheduler.LatencyStore
-	metrics  *Metrics
-	dial     func(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error)
+	selector       WorkerSelector
+	inflight       *routing.InflightTracker
+	latency        *scheduler.LatencyStore
+	metrics        *Metrics
+	admissionLimit int64
+	retryAfterSec  int
+	dial           func(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error)
 }
 
 func NewHandler(
@@ -35,13 +37,23 @@ func NewHandler(
 	inflight *routing.InflightTracker,
 	latency *scheduler.LatencyStore,
 	metrics *Metrics,
+	admissionLimit int,
+	retryAfterSec int,
 ) *Handler {
+	if admissionLimit <= 0 {
+		admissionLimit = 4
+	}
+	if retryAfterSec <= 0 {
+		retryAfterSec = 2
+	}
 	return &Handler{
-		selector: selector,
-		inflight: inflight,
-		latency:  latency,
-		metrics:  metrics,
-		dial:     dialWorker,
+		selector:       selector,
+		inflight:       inflight,
+		latency:        latency,
+		metrics:        metrics,
+		admissionLimit: int64(admissionLimit),
+		retryAfterSec:  retryAfterSec,
+		dial:           dialWorker,
 	}
 }
 
@@ -52,11 +64,23 @@ func (h *Handler) observeLatency(workerID string, started time.Time) {
 	h.latency.Observe(workerID, float64(time.Since(started).Milliseconds()))
 }
 
-func (h *Handler) track(workerID string) func() {
+func (h *Handler) tryAdmit(workerID string) (func(), bool) {
 	if h.inflight == nil {
-		return func() {}
+		return func() {}, true
 	}
-	return h.inflight.Track(workerID)
+	release, ok := h.inflight.TryTrack(workerID, h.admissionLimit)
+	if !ok {
+		return nil, false
+	}
+	if h.metrics != nil {
+		h.metrics.SetInflight(workerID, h.inflight.Get(workerID))
+	}
+	return func() {
+		release()
+		if h.metrics != nil {
+			h.metrics.SetInflight(workerID, h.inflight.Get(workerID))
+		}
+	}, true
 }
 
 func (h *Handler) Register(r *gin.Engine) {
@@ -104,12 +128,27 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 	worker, err := h.selector.SelectWorker(req.Model)
 	if err != nil {
 		statusCode, typ, code := selectErrorStatus(err)
+		if errors.Is(err, scheduler.ErrAdmissionRejected) {
+			h.metrics.IncRejected(req.Model, "fleet_saturated")
+			writeAdmissionRejected(c, h.retryAfterSec)
+			return
+		}
+		if statusCode == http.StatusServiceUnavailable || statusCode == http.StatusNotFound {
+			h.metrics.IncRejected(req.Model, code)
+		}
 		writeOpenAIError(c, statusCode, err.Error(), typ, code)
 		return
 	}
-	done := h.track(worker.ID)
+	done, ok := h.tryAdmit(worker.ID)
+	if !ok {
+		statusCode = http.StatusTooManyRequests
+		h.metrics.IncRejected(req.Model, "fleet_saturated")
+		writeAdmissionRejected(c, h.retryAfterSec)
+		return
+	}
 	defer done()
 	defer h.observeLatency(worker.ID, start)
+	h.metrics.IncAdmitted(req.Model)
 
 	prompt := messagesToPrompt(req.Messages)
 	genReq := toWorkerRequest(req.Model, prompt, req.Temperature, req.TopP, maxTokensFromChat(req))
@@ -175,12 +214,27 @@ func (h *Handler) completions(c *gin.Context) {
 	worker, err := h.selector.SelectWorker(req.Model)
 	if err != nil {
 		statusCode, typ, code := selectErrorStatus(err)
+		if errors.Is(err, scheduler.ErrAdmissionRejected) {
+			h.metrics.IncRejected(req.Model, "fleet_saturated")
+			writeAdmissionRejected(c, h.retryAfterSec)
+			return
+		}
+		if statusCode == http.StatusServiceUnavailable || statusCode == http.StatusNotFound {
+			h.metrics.IncRejected(req.Model, code)
+		}
 		writeOpenAIError(c, statusCode, err.Error(), typ, code)
 		return
 	}
-	done := h.track(worker.ID)
+	done, ok := h.tryAdmit(worker.ID)
+	if !ok {
+		statusCode = http.StatusTooManyRequests
+		h.metrics.IncRejected(req.Model, "fleet_saturated")
+		writeAdmissionRejected(c, h.retryAfterSec)
+		return
+	}
 	defer done()
 	defer h.observeLatency(worker.ID, start)
+	h.metrics.IncAdmitted(req.Model)
 
 	genReq := toWorkerRequest(req.Model, prompt, req.Temperature, req.TopP, req.MaxTokens)
 	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage

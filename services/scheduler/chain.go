@@ -18,17 +18,19 @@ func NewChain(filters []Filter, scorers []WeightedScorer) *Chain {
 }
 
 type ChainConfig struct {
-	WeightLoad    float64
-	WeightLatency float64
-	LatencyRefMs  float64
-	Metrics       *Metrics
+	WeightLoad     float64
+	WeightLatency  float64
+	LatencyRefMs   float64
+	AdmissionLimit int
+	Metrics        *Metrics
 }
 
 func DefaultChain() *Chain {
 	return NewConfiguredChain(ChainConfig{
-		WeightLoad:    0.8,
-		WeightLatency: 0.2,
-		LatencyRefMs:  100,
+		WeightLoad:     0.8,
+		WeightLatency:  0.2,
+		LatencyRefMs:   100,
+		AdmissionLimit: 4,
 	})
 }
 
@@ -37,8 +39,15 @@ func NewConfiguredChain(cfg ChainConfig) *Chain {
 	if wl <= 0 && wlat <= 0 {
 		wl, wlat = 0.8, 0.2
 	}
+	filters := []Filter{
+		HealthFilter{Metrics: cfg.Metrics},
+		ModelFilter{},
+	}
+	if cfg.AdmissionLimit > 0 {
+		filters = append(filters, AdmissionFilter{Limit: cfg.AdmissionLimit, Metrics: cfg.Metrics})
+	}
 	return NewChain(
-		[]Filter{HealthFilter{Metrics: cfg.Metrics}, ModelFilter{}},
+		filters,
 		[]WeightedScorer{
 			{Scorer: LeastLoaded{}, Weight: wl},
 			{Scorer: NewLatencyScorer(cfg.LatencyRefMs), Weight: wlat},
@@ -57,6 +66,9 @@ func (ch *Chain) Pick(ctx context.Context, req *Request, candidates []Candidate)
 	for _, f := range ch.Filters {
 		surviving = f.Filter(ctx, req, surviving)
 		if len(surviving) == 0 {
+			if f.Name() == "admission" {
+				return PickResult{}, ErrAdmissionRejected
+			}
 			return PickResult{}, ErrNoCapacity
 		}
 	}

@@ -81,10 +81,11 @@ func main() {
 	}))
 	must(c.Provide(func(sm *scheduler.Metrics, k *koanf.Koanf) *scheduler.Chain {
 		return scheduler.NewConfiguredChain(scheduler.ChainConfig{
-			WeightLoad:    k.Float64("scheduler.weight.load"),
-			WeightLatency: k.Float64("scheduler.weight.latency"),
-			LatencyRefMs:  k.Float64("scheduler.latency.ref.ms"),
-			Metrics:       sm,
+			WeightLoad:     k.Float64("scheduler.weight.load"),
+			WeightLatency:  k.Float64("scheduler.weight.latency"),
+			LatencyRefMs:   k.Float64("scheduler.latency.ref.ms"),
+			AdmissionLimit: k.Int("admission.per.worker.limit"),
+			Metrics:        sm,
 		})
 	}))
 	must(c.Provide(gateway.NewMetrics))
@@ -94,10 +95,26 @@ func main() {
 		latency *scheduler.LatencyStore,
 		chain *scheduler.Chain,
 		sm *scheduler.Metrics,
+		k *koanf.Koanf,
 	) gateway.WorkerSelector {
-		return gateway.NewSnapshotSelector(holder, inflight, latency, chain, sm)
+		return gateway.NewSnapshotSelector(holder, inflight, latency, chain, sm, k.Int("admission.per.worker.limit"))
 	}))
-	must(c.Provide(gateway.NewHandler))
+	must(c.Provide(func(
+		selector gateway.WorkerSelector,
+		inflight *routing.InflightTracker,
+		latency *scheduler.LatencyStore,
+		gm *gateway.Metrics,
+		k *koanf.Koanf,
+	) *gateway.Handler {
+		return gateway.NewHandler(
+			selector,
+			inflight,
+			latency,
+			gm,
+			k.Int("admission.per.worker.limit"),
+			k.Int("admission.retry.after.seconds"),
+		)
+	}))
 
 	must(c.Invoke(run))
 }

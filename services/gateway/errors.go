@@ -3,17 +3,23 @@ package gateway
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/srav-afk/forge-labs/services/scheduler"
 )
 
 func selectErrorStatus(err error) (httpStatus int, errType, code string) {
 	if errors.Is(err, ErrNoSnapshot) {
 		return http.StatusServiceUnavailable, "server_error", "no_snapshot"
 	}
-	if errors.Is(err, errNoCapacity) {
+	if errors.Is(err, scheduler.ErrAdmissionRejected) {
+		return http.StatusTooManyRequests, "capacity_exceeded", "fleet_saturated"
+	}
+	if errors.Is(err, scheduler.ErrNoCapacity) {
 		return http.StatusServiceUnavailable, "server_error", "no_capacity"
 	}
 	return http.StatusNotFound, "invalid_request_error", "model_not_found"
@@ -37,6 +43,19 @@ func writeOpenAIError(c *gin.Context, httpStatus int, message, errType, code str
 			Code:    code,
 		},
 	})
+}
+
+func writeAdmissionRejected(c *gin.Context, retryAfterSec int) {
+	if retryAfterSec <= 0 {
+		retryAfterSec = 2
+	}
+	c.Header("Retry-After", strconv.Itoa(retryAfterSec))
+	c.Header("X-Forge-Rejected-By", "admission")
+	writeOpenAIError(c, http.StatusTooManyRequests,
+		"The fleet is at capacity; no worker has available slots. Retry after the indicated delay.",
+		"capacity_exceeded",
+		"fleet_saturated",
+	)
 }
 
 func mapGRPCError(err error) (httpStatus int, message, errType, code string) {
