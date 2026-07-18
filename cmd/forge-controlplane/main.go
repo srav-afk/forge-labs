@@ -24,6 +24,7 @@ import (
 	"github.com/srav-afk/forge-labs/internal/db"
 	"github.com/srav-afk/forge-labs/internal/observability"
 	"github.com/srav-afk/forge-labs/internal/redisx"
+	"github.com/srav-afk/forge-labs/services/gateway"
 	"github.com/srav-afk/forge-labs/services/health"
 	"github.com/srav-afk/forge-labs/services/registry"
 	registryimpl "github.com/srav-afk/forge-labs/services/registry/impl"
@@ -50,6 +51,11 @@ func main() {
 	must(c.Provide(func(rdb *redis.Client, m *health.Metrics, k *koanf.Koanf) *health.Service {
 		return health.NewService(rdb, m, config.Duration(k, "heartbeat.reconcile", 3*time.Second))
 	}))
+	must(c.Provide(gateway.NewMetrics))
+	must(c.Provide(func(repo registry.WorkerRepository, k *koanf.Koanf) gateway.WorkerSelector {
+		return gateway.NewRegistrySelector(repo, k.String("gateway.worker.endpoint"))
+	}))
+	must(c.Provide(gateway.NewHandler))
 
 	must(c.Invoke(run))
 }
@@ -60,6 +66,8 @@ func run(
 	svc registry.RegistryService,
 	healthSvc *health.Service,
 	rdb *redis.Client,
+	selector gateway.WorkerSelector,
+	gw *gateway.Handler,
 ) error {
 	defer rdb.Close()
 
@@ -74,13 +82,18 @@ func run(
 	defer stop()
 
 	healthSvc.Start(ctx)
+	if rs, ok := selector.(interface {
+		Start(context.Context, time.Duration)
+	}); ok {
+		rs.Start(ctx, config.Duration(k, "gateway.selector.refresh", 5*time.Second))
+	}
 
 	go serveMetrics(k.String("metrics.addr"), reg)
 	go serveGRPC(k.String("grpc.addr"), svc)
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- serveHTTP(k.String("http.addr"))
+		errCh <- serveHTTP(k.String("http.addr"), gw)
 	}()
 
 	select {
@@ -114,13 +127,15 @@ func serveGRPC(addr string, svc registry.RegistryService) {
 	}
 }
 
-func serveHTTP(addr string) error {
+func serveHTTP(addr string, gw *gateway.Handler) error {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	gw.Register(r)
+	log.Printf("gateway http listening on %s", addr)
 	return r.Run(addr)
 }
 

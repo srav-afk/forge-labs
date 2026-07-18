@@ -11,6 +11,7 @@ import (
 
 type WorkerRepository interface {
 	Upsert(ctx context.Context, w *models.Worker) error
+	List(ctx context.Context) ([]models.Worker, error)
 }
 
 type gormWorkerRepository struct {
@@ -44,4 +45,10 @@ func (r *gormWorkerRepository) Upsert(ctx context.Context, w *models.Worker) err
 		}
 		return tx.Create(&w.Models).Error
 	})
+}
+
+func (r *gormWorkerRepository) List(ctx context.Context) ([]models.Worker, error) {
+	var workers []models.Worker
+	err := r.db.WithContext(ctx).Preload("Models").Find(&workers).Error
+	return workers, err
 }
