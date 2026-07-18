@@ -75,10 +75,10 @@ func (h *Hysteresis) Apply(key string, desired, current int, policy ScalingPolic
 	}
 
 	cooldown := time.Duration(policy.ScaleDownDelaySeconds) * time.Second
-	if cooldown <= 0 {
+	if policy.ScaleDownDelaySeconds < 0 {
 		cooldown = 900 * time.Second
 	}
-	if desired < current && now.Sub(st.lastAction) >= cooldown {
+	if desired < current && (cooldown == 0 || now.Sub(st.lastAction) >= cooldown) {
 		target := minD
 		out = current - h.step
 		if out < target {
