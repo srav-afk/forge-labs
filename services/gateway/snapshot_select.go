@@ -6,14 +6,20 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/srav-afk/forge-labs/services/catalog"
 	"github.com/srav-afk/forge-labs/services/routing"
 	"github.com/srav-afk/forge-labs/services/scheduler"
 )
 
-var ErrNoSnapshot = errors.New("no snapshot yet")
+var (
+	ErrNoSnapshot     = errors.New("no snapshot yet")
+	ErrModelNotFound  = errors.New("model not found")
+	ErrNoLiveAssignee = errors.New("no live worker assigned for model")
+)
 
 type SnapshotSelector struct {
 	holder         *routing.SnapshotHolder
+	catalog        *catalog.SnapshotHolder
 	inflight       *routing.InflightTracker
 	latency        *scheduler.LatencyStore
 	chain          *scheduler.Chain
@@ -23,6 +29,7 @@ type SnapshotSelector struct {
 
 func NewSnapshotSelector(
 	holder *routing.SnapshotHolder,
+	catalogHolder *catalog.SnapshotHolder,
 	inflight *routing.InflightTracker,
 	latency *scheduler.LatencyStore,
 	chain *scheduler.Chain,
@@ -31,6 +38,7 @@ func NewSnapshotSelector(
 ) *SnapshotSelector {
 	return &SnapshotSelector{
 		holder:         holder,
+		catalog:        catalogHolder,
 		inflight:       inflight,
 		latency:        latency,
 		chain:          chain,
@@ -56,9 +64,19 @@ func (s *SnapshotSelector) SelectWorkers(model, prompt string, limit int) ([]Sel
 		limit = 3
 	}
 
-	base, adapter := ParseModelID(model)
+	base, adapter, allowedWorkers, err := s.resolveModel(model)
+	if err != nil {
+		return nil, err
+	}
+
 	req := &scheduler.Request{BaseModel: base, Adapter: adapter, Prompt: prompt}
 	candidates := scheduler.CandidatesFromSnapshot(snap, s.inflight, s.latency)
+	if allowedWorkers != nil {
+		candidates = filterByWorkerIDs(candidates, allowedWorkers)
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("%w: %q", ErrNoLiveAssignee, model)
+		}
+	}
 
 	ranked, err := s.chain.Rank(context.Background(), req, candidates)
 	if err != nil {
@@ -92,7 +110,52 @@ func (s *SnapshotSelector) SelectWorkers(model, prompt string, limit int) ([]Sel
 	return out, nil
 }
 
+func (s *SnapshotSelector) resolveModel(model string) (base, adapter string, allowed map[string]struct{}, err error) {
+	base, adapter = ParseModelID(model)
+	cat := s.catalog.Load()
+	if cat == nil || cat.Empty() {
+		return base, adapter, nil, nil
+	}
+	id, workers, ok := cat.Resolve(model)
+	if !ok {
+		return "", "", nil, fmt.Errorf("%w: %q", ErrModelNotFound, model)
+	}
+	allowed = make(map[string]struct{}, len(workers))
+	for _, w := range workers {
+		allowed[w] = struct{}{}
+	}
+	return id.BaseModel, id.Adapter, allowed, nil
+}
+
+func filterByWorkerIDs(cands []scheduler.Candidate, allowed map[string]struct{}) []scheduler.Candidate {
+	out := make([]scheduler.Candidate, 0, len(cands))
+	for _, c := range cands {
+		if _, ok := allowed[c.WorkerID]; ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func (s *SnapshotSelector) ListModels() []modelObject {
+	cat := s.catalog.Load()
+	if cat != nil && !cat.Empty() {
+		out := make([]modelObject, 0, len(cat.ByName))
+		created := cat.BuiltAt.Unix()
+		if created == 0 {
+			created = time.Now().Unix()
+		}
+		for _, m := range cat.ByName {
+			out = append(out, modelObject{
+				ID:      m.Name,
+				Object:  "model",
+				Created: created,
+				OwnedBy: "forge",
+			})
+		}
+		return out
+	}
+
 	snap := s.holder.Load()
 	if snap == nil {
 		return nil

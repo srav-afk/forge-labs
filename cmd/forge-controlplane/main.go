@@ -24,6 +24,7 @@ import (
 	"github.com/srav-afk/forge-labs/internal/db"
 	"github.com/srav-afk/forge-labs/internal/observability"
 	"github.com/srav-afk/forge-labs/internal/redisx"
+	"github.com/srav-afk/forge-labs/services/catalog"
 	"github.com/srav-afk/forge-labs/services/gateway"
 	"github.com/srav-afk/forge-labs/services/gateway/reliability"
 	"github.com/srav-afk/forge-labs/services/health"
@@ -49,6 +50,11 @@ func main() {
 	}))
 	must(c.Provide(registry.NewWorkerRepository))
 	must(c.Provide(registryimpl.NewRegistryService))
+	must(c.Provide(catalog.NewRepository))
+	must(c.Provide(catalog.NewSnapshotHolder))
+	must(c.Provide(func(repo catalog.Repository, holder *catalog.SnapshotHolder, rdb *redis.Client) *catalog.Service {
+		return catalog.NewService(repo, holder, rdb)
+	}))
 	must(c.Provide(observability.NewRegistry))
 	must(c.Provide(health.NewMetrics))
 	must(c.Provide(func(rdb *redis.Client, m *health.Metrics, k *koanf.Koanf) *health.Service {
@@ -95,13 +101,14 @@ func main() {
 	must(c.Provide(gateway.NewMetrics))
 	must(c.Provide(func(
 		holder *routing.SnapshotHolder,
+		catalogHolder *catalog.SnapshotHolder,
 		inflight *routing.InflightTracker,
 		latency *scheduler.LatencyStore,
 		chain *scheduler.Chain,
 		sm *scheduler.Metrics,
 		k *koanf.Koanf,
 	) gateway.WorkerSelector {
-		return gateway.NewSnapshotSelector(holder, inflight, latency, chain, sm, k.Int("admission.per.worker.limit"))
+		return gateway.NewSnapshotSelector(holder, catalogHolder, inflight, latency, chain, sm, k.Int("admission.per.worker.limit"))
 	}))
 	must(c.Provide(func(reg *observability.Registry) *reliability.Metrics {
 		return reliability.NewMetrics(reg)
@@ -164,6 +171,7 @@ func run(
 	holder *routing.SnapshotHolder,
 	rm *routing.Metrics,
 	pub *routing.Publisher,
+	catalogSvc *catalog.Service,
 	gw *gateway.Handler,
 ) error {
 	defer rdb.Close()
@@ -193,6 +201,7 @@ func run(
 	defer stop()
 
 	healthSvc.Start(ctx)
+	catalogSvc.Start(ctx)
 	go routing.RunSubscriber(ctx, rdb, holder, rm)
 	pub.Start(ctx)
 

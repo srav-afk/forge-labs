@@ -5,12 +5,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/srav-afk/forge-labs/services/catalog"
 	"github.com/srav-afk/forge-labs/services/routing"
 	"github.com/srav-afk/forge-labs/services/scheduler"
 )
 
 func newTestSelector(h *routing.SnapshotHolder) *SnapshotSelector {
-	return NewSnapshotSelector(h, routing.NewInflightTracker(), scheduler.NewLatencyStore(10*time.Second, nil), scheduler.DefaultChain(), nil, 4)
+	return NewSnapshotSelector(h, catalog.NewSnapshotHolder(), routing.NewInflightTracker(), scheduler.NewLatencyStore(10*time.Second, nil), scheduler.DefaultChain(), nil, 4)
+}
+
+func newTestSelectorWithCatalog(h *routing.SnapshotHolder, cat *catalog.SnapshotHolder) *SnapshotSelector {
+	return NewSnapshotSelector(h, cat, routing.NewInflightTracker(), scheduler.NewLatencyStore(10*time.Second, nil), scheduler.DefaultChain(), nil, 4)
 }
 
 func TestSnapshotSelectorNoSnapshot(t *testing.T) {
@@ -86,7 +91,7 @@ func TestSnapshotSelectorPrefersLowerEWMA(t *testing.T) {
 		LatencyRefMs:   100,
 		AdmissionLimit: 4,
 	})
-	s := NewSnapshotSelector(h, routing.NewInflightTracker(), store, chain, nil, 4)
+	s := NewSnapshotSelector(h, catalog.NewSnapshotHolder(), routing.NewInflightTracker(), store, chain, nil, 4)
 	w, err := s.SelectWorker("m", "")
 	if err != nil {
 		t.Fatal(err)
@@ -124,5 +129,145 @@ func TestSnapshotSelectorNoCapacity(t *testing.T) {
 	_, err := s.SelectWorker("missing", "x")
 	if !errors.Is(err, scheduler.ErrNoCapacity) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestCatalogRoutesByAssignment(t *testing.T) {
+	h := routing.NewSnapshotHolder()
+	h.Store(&routing.RoutingSnapshot{
+		Epoch: 1,
+		Workers: []routing.WorkerView{
+			{ID: "workerA", Endpoint: "a:1", BaseModel: "llama-3.1-8b", Healthy: true, Ready: true},
+			{ID: "workerB", Endpoint: "b:1", BaseModel: "qwen2.5-7b", Healthy: true, Ready: true},
+		},
+	})
+	cat := catalog.NewSnapshotHolder()
+	cat.Store(&catalog.Snapshot{
+		BuiltAt: time.Now(),
+		ByName: map[string]catalog.ModelIdentity{
+			"llama-3.1-8b": {ID: "m1", Name: "llama-3.1-8b", BaseModel: "llama-3.1-8b"},
+			"qwen2.5-7b":   {ID: "m2", Name: "qwen2.5-7b", BaseModel: "qwen2.5-7b"},
+		},
+		WorkersByModel: map[string][]string{
+			"m1": {"workerA"},
+			"m2": {"workerB"},
+		},
+	})
+	s := newTestSelectorWithCatalog(h, cat)
+
+	w, err := s.SelectWorker("qwen2.5-7b", "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.ID != "workerB" {
+		t.Fatalf("qwen -> %s want workerB", w.ID)
+	}
+	w, err = s.SelectWorker("llama-3.1-8b", "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.ID != "workerA" {
+		t.Fatalf("llama -> %s want workerA", w.ID)
+	}
+}
+
+func TestCatalogUnknownModel404(t *testing.T) {
+	h := routing.NewSnapshotHolder()
+	h.Store(&routing.RoutingSnapshot{
+		Epoch: 1,
+		Workers: []routing.WorkerView{
+			{ID: "w1", Endpoint: "e", BaseModel: "m", Healthy: true, Ready: true},
+		},
+	})
+	cat := catalog.NewSnapshotHolder()
+	cat.Store(&catalog.Snapshot{
+		BuiltAt: time.Now(),
+		ByName: map[string]catalog.ModelIdentity{
+			"known": {ID: "m1", Name: "known", BaseModel: "known"},
+		},
+		WorkersByModel: map[string][]string{"m1": {"w1"}},
+	})
+	s := newTestSelectorWithCatalog(h, cat)
+	_, err := s.SelectWorker("does-not-exist", "x")
+	if !errors.Is(err, ErrModelNotFound) {
+		t.Fatalf("err=%v", err)
+	}
+	status, typ, code := selectErrorStatus(err)
+	if status != 404 || typ != "invalid_request_error" || code != "model_not_found" {
+		t.Fatalf("status=%d type=%s code=%s", status, typ, code)
+	}
+}
+
+func TestCatalogSkipsAssignedButDown(t *testing.T) {
+	h := routing.NewSnapshotHolder()
+	h.Store(&routing.RoutingSnapshot{
+		Epoch: 1,
+		Workers: []routing.WorkerView{
+			{ID: "workerB", Endpoint: "b:1", BaseModel: "qwen2.5-7b", Healthy: false, Ready: false},
+			{ID: "workerA", Endpoint: "a:1", BaseModel: "qwen2.5-7b", Healthy: true, Ready: true},
+		},
+	})
+	cat := catalog.NewSnapshotHolder()
+	cat.Store(&catalog.Snapshot{
+		BuiltAt: time.Now(),
+		ByName: map[string]catalog.ModelIdentity{
+			"qwen2.5-7b": {ID: "m2", Name: "qwen2.5-7b", BaseModel: "qwen2.5-7b"},
+		},
+		WorkersByModel: map[string][]string{"m2": {"workerB"}},
+	})
+	s := newTestSelectorWithCatalog(h, cat)
+	_, err := s.SelectWorker("qwen2.5-7b", "hi")
+	if !errors.Is(err, scheduler.ErrNoCapacity) && !errors.Is(err, ErrNoLiveAssignee) {
+		t.Fatalf("err=%v want no live capacity", err)
+	}
+}
+
+func TestCatalogListModelsPrefersCatalog(t *testing.T) {
+	h := routing.NewSnapshotHolder()
+	h.Store(&routing.RoutingSnapshot{
+		Epoch: 1,
+		Workers: []routing.WorkerView{
+			{ID: "w1", Endpoint: "e", BaseModel: "from-worker", Healthy: true, Ready: true},
+		},
+	})
+	cat := catalog.NewSnapshotHolder()
+	cat.Store(&catalog.Snapshot{
+		BuiltAt: time.Unix(1700000000, 0),
+		ByName: map[string]catalog.ModelIdentity{
+			"catalog-model": {ID: "m1", Name: "catalog-model", BaseModel: "catalog-model"},
+		},
+		WorkersByModel: map[string][]string{"m1": {"w1"}},
+	})
+	s := newTestSelectorWithCatalog(h, cat)
+	models := s.ListModels()
+	if len(models) != 1 || models[0].ID != "catalog-model" {
+		t.Fatalf("%+v", models)
+	}
+}
+
+func TestCatalogIntersectLivePicksHealthyReplica(t *testing.T) {
+	h := routing.NewSnapshotHolder()
+	h.Store(&routing.RoutingSnapshot{
+		Epoch: 1,
+		Workers: []routing.WorkerView{
+			{ID: "dead", Endpoint: "d", BaseModel: "m", Healthy: false, Ready: false},
+			{ID: "live", Endpoint: "l", BaseModel: "m", Healthy: true, Ready: true},
+		},
+	})
+	cat := catalog.NewSnapshotHolder()
+	cat.Store(&catalog.Snapshot{
+		BuiltAt: time.Now(),
+		ByName: map[string]catalog.ModelIdentity{
+			"m": {ID: "mid", Name: "m", BaseModel: "m"},
+		},
+		WorkersByModel: map[string][]string{"mid": {"dead", "live"}},
+	})
+	s := newTestSelectorWithCatalog(h, cat)
+	w, err := s.SelectWorker("m", "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.ID != "live" {
+		t.Fatalf("got %s", w.ID)
 	}
 }

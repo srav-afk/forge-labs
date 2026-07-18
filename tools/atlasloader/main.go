@@ -7,6 +7,7 @@ import (
 
 	"ariga.io/atlas-provider-gorm/gormschema"
 
+	"github.com/srav-afk/forge-labs/services/catalog"
 	"github.com/srav-afk/forge-labs/services/registry/models"
 )
 
@@ -14,6 +15,8 @@ func main() {
 	stmts, err := gormschema.New("postgres").Load(
 		&models.Worker{},
 		&models.ServableModel{},
+		&catalog.Model{},
+		&catalog.ModelAssignment{},
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load gorm schema: %v\n", err)
