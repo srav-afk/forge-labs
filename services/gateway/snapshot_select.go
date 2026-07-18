@@ -40,16 +40,27 @@ func NewSnapshotSelector(
 }
 
 func (s *SnapshotSelector) SelectWorker(model, prompt string) (*SelectedWorker, error) {
+	ws, err := s.SelectWorkers(model, prompt, 1)
+	if err != nil {
+		return nil, err
+	}
+	return &ws[0], nil
+}
+
+func (s *SnapshotSelector) SelectWorkers(model, prompt string, limit int) ([]SelectedWorker, error) {
 	snap := s.holder.Load()
 	if snap == nil {
 		return nil, ErrNoSnapshot
+	}
+	if limit <= 0 {
+		limit = 3
 	}
 
 	base, adapter := ParseModelID(model)
 	req := &scheduler.Request{BaseModel: base, Adapter: adapter, Prompt: prompt}
 	candidates := scheduler.CandidatesFromSnapshot(snap, s.inflight, s.latency)
 
-	pick, err := s.chain.PickWithMetrics(context.Background(), req, candidates, s.metrics)
+	ranked, err := s.chain.Rank(context.Background(), req, candidates)
 	if err != nil {
 		if errors.Is(err, scheduler.ErrAdmissionRejected) {
 			return nil, fmt.Errorf("%w: model %q", scheduler.ErrAdmissionRejected, model)
@@ -59,16 +70,26 @@ func (s *SnapshotSelector) SelectWorker(model, prompt string) (*SelectedWorker, 
 		}
 		return nil, err
 	}
-
-	if s.metrics != nil {
-		s.metrics.IncDispatched(pick.WorkerID, model)
+	if s.metrics != nil && len(ranked) > 0 {
+		s.metrics.SetScore(ranked[0].WorkerID, ranked[0].Score)
+		s.metrics.IncRoutingDecision()
+		if req.PreferredWorker != "" && ranked[0].WorkerID == req.PreferredWorker {
+			s.metrics.IncAffinityHit()
+		}
+		s.metrics.IncDispatched(ranked[0].WorkerID, model)
 	}
-
-	return &SelectedWorker{
-		ID:       pick.WorkerID,
-		Endpoint: pick.Endpoint,
-		Models:   []string{model},
-	}, nil
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	out := make([]SelectedWorker, 0, len(ranked))
+	for _, p := range ranked {
+		out = append(out, SelectedWorker{
+			ID:       p.WorkerID,
+			Endpoint: p.Endpoint,
+			Models:   []string{model},
+		})
+	}
+	return out, nil
 }
 
 func (s *SnapshotSelector) ListModels() []modelObject {

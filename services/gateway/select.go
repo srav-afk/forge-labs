@@ -8,5 +8,6 @@ type SelectedWorker struct {
 
 type WorkerSelector interface {
 	SelectWorker(model, prompt string) (*SelectedWorker, error)
+	SelectWorkers(model, prompt string, limit int) ([]SelectedWorker, error)
 	ListModels() []modelObject
 }

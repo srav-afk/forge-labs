@@ -31,6 +31,9 @@ type staticSelector struct {
 }
 
 func (s staticSelector) SelectWorker(string, string) (*SelectedWorker, error) { return s.w, nil }
+func (s staticSelector) SelectWorkers(string, string, int) ([]SelectedWorker, error) {
+	return []SelectedWorker{*s.w}, nil
+}
 func (s staticSelector) ListModels() []modelObject {
 	return []modelObject{{ID: "llama3.2", Object: "model", Created: 1, OwnedBy: "forge"}}
 }
@@ -67,7 +70,7 @@ func testHandler(t *testing.T, fw *fakeWorker) (*Handler, *httptest.Server) {
 	m := NewMetrics(reg)
 	inf := routing.NewInflightTracker()
 	lat := scheduler.NewLatencyStore(10*time.Second, nil)
-	h := NewHandler(staticSelector{w: &SelectedWorker{ID: "w1", Endpoint: "bufnet", Models: []string{"llama3.2"}}}, inf, lat, m, 8, 2)
+	h := NewHandler(staticSelector{w: &SelectedWorker{ID: "w1", Endpoint: "bufnet", Models: []string{"llama3.2"}}}, inf, lat, m, nil, HandlerConfig{AdmissionLimit: 8, RetryAfterSec: 2, MaxAttempts: 3})
 	h.dial = func(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error) {
 		conn, err := grpc.NewClient("passthrough:///bufnet",
 			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
@@ -184,7 +187,7 @@ func TestStreamCancelPropagates(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	reg := observability.NewRegistry()
-	h := NewHandler(staticSelector{w: &SelectedWorker{ID: "w1", Endpoint: "bufnet"}}, routing.NewInflightTracker(), scheduler.NewLatencyStore(10*time.Second, nil), NewMetrics(reg), 8, 2)
+	h := NewHandler(staticSelector{w: &SelectedWorker{ID: "w1", Endpoint: "bufnet"}}, routing.NewInflightTracker(), scheduler.NewLatencyStore(10*time.Second, nil), NewMetrics(reg), nil, HandlerConfig{AdmissionLimit: 8, RetryAfterSec: 2, MaxAttempts: 3})
 	h.dial = func(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error) {
 		conn, err := grpc.NewClient("passthrough:///bufnet",
 			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),

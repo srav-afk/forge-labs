@@ -76,14 +76,38 @@ type PickResult struct {
 }
 
 func (ch *Chain) Pick(ctx context.Context, req *Request, candidates []Candidate) (PickResult, error) {
+	ranked, err := ch.Rank(ctx, req, candidates)
+	if err != nil {
+		return PickResult{}, err
+	}
+	return ranked[0], nil
+}
+
+func (ch *Chain) PickWithMetrics(ctx context.Context, req *Request, candidates []Candidate, metrics *Metrics) (PickResult, error) {
+	ranked, err := ch.Rank(ctx, req, candidates)
+	if err != nil {
+		return PickResult{}, err
+	}
+	p := ranked[0]
+	if metrics != nil {
+		metrics.SetScore(p.WorkerID, p.Score)
+		metrics.IncRoutingDecision()
+		if req != nil && req.PreferredWorker != "" && p.WorkerID == req.PreferredWorker {
+			metrics.IncAffinityHit()
+		}
+	}
+	return p, nil
+}
+
+func (ch *Chain) Rank(ctx context.Context, req *Request, candidates []Candidate) ([]PickResult, error) {
 	surviving := candidates
 	for _, f := range ch.Filters {
 		surviving = f.Filter(ctx, req, surviving)
 		if len(surviving) == 0 {
 			if f.Name() == "admission" {
-				return PickResult{}, ErrAdmissionRejected
+				return nil, ErrAdmissionRejected
 			}
-			return PickResult{}, ErrNoCapacity
+			return nil, ErrNoCapacity
 		}
 	}
 
@@ -117,25 +141,13 @@ func (ch *Chain) Pick(ctx context.Context, req *Request, candidates []Candidate)
 		return results[i].c.WorkerID < results[j].c.WorkerID
 	})
 
-	best := results[0]
-	return PickResult{
-		WorkerID: best.c.WorkerID,
-		Endpoint: best.c.Endpoint,
-		Score:    best.total,
-	}, nil
-}
-
-func (ch *Chain) PickWithMetrics(ctx context.Context, req *Request, candidates []Candidate, metrics *Metrics) (PickResult, error) {
-	p, err := ch.Pick(ctx, req, candidates)
-	if err != nil {
-		return p, err
+	out := make([]PickResult, 0, len(results))
+	for _, r := range results {
+		out = append(out, PickResult{
+			WorkerID: r.c.WorkerID,
+			Endpoint: r.c.Endpoint,
+			Score:    r.total,
+		})
 	}
-	if metrics != nil {
-		metrics.SetScore(p.WorkerID, p.Score)
-		metrics.IncRoutingDecision()
-		if req != nil && req.PreferredWorker != "" && p.WorkerID == req.PreferredWorker {
-			metrics.IncAffinityHit()
-		}
-	}
-	return p, nil
+	return out, nil
 }

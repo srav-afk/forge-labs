@@ -25,6 +25,7 @@ import (
 	"github.com/srav-afk/forge-labs/internal/observability"
 	"github.com/srav-afk/forge-labs/internal/redisx"
 	"github.com/srav-afk/forge-labs/services/gateway"
+	"github.com/srav-afk/forge-labs/services/gateway/reliability"
 	"github.com/srav-afk/forge-labs/services/health"
 	"github.com/srav-afk/forge-labs/services/registry"
 	registryimpl "github.com/srav-afk/forge-labs/services/registry/impl"
@@ -102,11 +103,39 @@ func main() {
 	) gateway.WorkerSelector {
 		return gateway.NewSnapshotSelector(holder, inflight, latency, chain, sm, k.Int("admission.per.worker.limit"))
 	}))
+	must(c.Provide(func(reg *observability.Registry) *reliability.Metrics {
+		return reliability.NewMetrics(reg)
+	}))
+	must(c.Provide(func(rm *reliability.Metrics, k *koanf.Koanf) *reliability.BreakerMap {
+		return reliability.NewBreakerMap(reliability.BreakerConfig{
+			MinRequests:  uint32(k.Int("reliability.breaker.min.requests")),
+			FailureRatio: k.Float64("reliability.breaker.failure.ratio"),
+			Timeout:      config.Duration(k, "reliability.breaker.timeout", 5*time.Second),
+			MaxHalfOpen:  2,
+		}, func(workerID string, state reliability.State) {
+			rm.SetBreakerState(workerID, state)
+		})
+	}))
+	must(c.Provide(func(k *koanf.Koanf) *reliability.RetryBudget {
+		return reliability.NewRetryBudget(
+			k.Float64("reliability.retry.budget.tokens"),
+			k.Float64("reliability.retry.budget.ratio"),
+		)
+	}))
+	must(c.Provide(func(
+		budget *reliability.RetryBudget,
+		breakers *reliability.BreakerMap,
+		rm *reliability.Metrics,
+		k *koanf.Koanf,
+	) *reliability.Failover {
+		return reliability.NewFailover(budget, breakers, rm, k.Int("reliability.max.attempts"))
+	}))
 	must(c.Provide(func(
 		selector gateway.WorkerSelector,
 		inflight *routing.InflightTracker,
 		latency *scheduler.LatencyStore,
 		gm *gateway.Metrics,
+		fo *reliability.Failover,
 		k *koanf.Koanf,
 	) *gateway.Handler {
 		return gateway.NewHandler(
@@ -114,8 +143,12 @@ func main() {
 			inflight,
 			latency,
 			gm,
-			k.Int("admission.per.worker.limit"),
-			k.Int("admission.retry.after.seconds"),
+			fo,
+			gateway.HandlerConfig{
+				AdmissionLimit: k.Int("admission.per.worker.limit"),
+				RetryAfterSec:  k.Int("admission.retry.after.seconds"),
+				MaxAttempts:    k.Int("reliability.max.attempts"),
+			},
 		)
 	}))
 

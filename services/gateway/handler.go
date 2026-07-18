@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	workerv1 "github.com/srav-afk/forge-labs/gen/worker/v1"
+	"github.com/srav-afk/forge-labs/services/gateway/reliability"
 	"github.com/srav-afk/forge-labs/services/routing"
 	"github.com/srav-afk/forge-labs/services/scheduler"
 )
@@ -27,9 +28,17 @@ type Handler struct {
 	inflight       *routing.InflightTracker
 	latency        *scheduler.LatencyStore
 	metrics        *Metrics
+	failover       *reliability.Failover
 	admissionLimit int64
 	retryAfterSec  int
+	maxAttempts    int
 	dial           func(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error)
+}
+
+type HandlerConfig struct {
+	AdmissionLimit int
+	RetryAfterSec  int
+	MaxAttempts    int
 }
 
 func NewHandler(
@@ -37,22 +46,27 @@ func NewHandler(
 	inflight *routing.InflightTracker,
 	latency *scheduler.LatencyStore,
 	metrics *Metrics,
-	admissionLimit int,
-	retryAfterSec int,
+	failover *reliability.Failover,
+	cfg HandlerConfig,
 ) *Handler {
-	if admissionLimit <= 0 {
-		admissionLimit = 4
+	if cfg.AdmissionLimit <= 0 {
+		cfg.AdmissionLimit = 4
 	}
-	if retryAfterSec <= 0 {
-		retryAfterSec = 2
+	if cfg.RetryAfterSec <= 0 {
+		cfg.RetryAfterSec = 2
+	}
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = 3
 	}
 	return &Handler{
 		selector:       selector,
 		inflight:       inflight,
 		latency:        latency,
 		metrics:        metrics,
-		admissionLimit: int64(admissionLimit),
-		retryAfterSec:  retryAfterSec,
+		failover:       failover,
+		admissionLimit: int64(cfg.AdmissionLimit),
+		retryAfterSec:  cfg.RetryAfterSec,
+		maxAttempts:    cfg.MaxAttempts,
 		dial:           dialWorker,
 	}
 }
@@ -125,11 +139,11 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		h.metrics.ObserveDuration("chat_completions", req.Model, req.Stream, statusCode, time.Since(start).Seconds())
 	}()
 
-	prompt := messagesToPrompt(req.Messages)
+	routePrompt := messagesToPrompt(req.Messages)
 	if key := c.GetHeader("X-Session-Affinity"); key != "" {
-		prompt = key
+		routePrompt = key
 	}
-	worker, err := h.selector.SelectWorker(req.Model, prompt)
+	workers, err := h.rankWorkers(req.Model, routePrompt)
 	if err != nil {
 		statusCode, typ, code := selectErrorStatus(err)
 		if errors.Is(err, scheduler.ErrAdmissionRejected) {
@@ -143,7 +157,9 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		writeOpenAIError(c, statusCode, err.Error(), typ, code)
 		return
 	}
-	done, ok := h.tryAdmit(worker.ID)
+
+	// admit against preferred worker slot; failover keeps using same accounting on success path
+	done, ok := h.tryAdmit(workers[0].ID)
 	if !ok {
 		statusCode = http.StatusTooManyRequests
 		h.metrics.IncRejected(req.Model, "fleet_saturated")
@@ -151,16 +167,18 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		return
 	}
 	defer done()
-	defer h.observeLatency(worker.ID, start)
 	h.metrics.IncAdmitted(req.Model)
 
-	// routing may use affinity key; generation always uses full chat prompt
 	genPrompt := messagesToPrompt(req.Messages)
 	genReq := toWorkerRequest(req.Model, genPrompt, req.Temperature, req.TopP, maxTokensFromChat(req))
 	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
 
 	if req.Stream {
-		if err := h.streamChat(c, worker, genReq, req.Model, includeUsage, start); err != nil {
+		worker, err := h.streamChatFailover(c, workers, genReq, req.Model, includeUsage, start)
+		if worker != nil {
+			h.observeLatency(worker.ID, start)
+		}
+		if err != nil {
 			if !c.Writer.Written() {
 				httpStatus, msg, typ, code := mapGRPCError(err)
 				statusCode = httpStatus
@@ -170,7 +188,10 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		return
 	}
 
-	text, usage, finish, err := h.collect(c.Request.Context(), worker, genReq)
+	text, usage, finish, worker, err := h.collectWithFailover(c.Request.Context(), workers, genReq)
+	if worker != nil {
+		h.observeLatency(worker.ID, start)
+	}
 	if err != nil {
 		httpStatus, msg, typ, code := mapGRPCError(err)
 		statusCode = httpStatus
@@ -220,7 +241,7 @@ func (h *Handler) completions(c *gin.Context) {
 	if key := c.GetHeader("X-Session-Affinity"); key != "" {
 		routePrompt = key
 	}
-	worker, err := h.selector.SelectWorker(req.Model, routePrompt)
+	workers, err := h.rankWorkers(req.Model, routePrompt)
 	if err != nil {
 		statusCode, typ, code := selectErrorStatus(err)
 		if errors.Is(err, scheduler.ErrAdmissionRejected) {
@@ -234,7 +255,7 @@ func (h *Handler) completions(c *gin.Context) {
 		writeOpenAIError(c, statusCode, err.Error(), typ, code)
 		return
 	}
-	done, ok := h.tryAdmit(worker.ID)
+	done, ok := h.tryAdmit(workers[0].ID)
 	if !ok {
 		statusCode = http.StatusTooManyRequests
 		h.metrics.IncRejected(req.Model, "fleet_saturated")
@@ -242,14 +263,17 @@ func (h *Handler) completions(c *gin.Context) {
 		return
 	}
 	defer done()
-	defer h.observeLatency(worker.ID, start)
 	h.metrics.IncAdmitted(req.Model)
 
 	genReq := toWorkerRequest(req.Model, genPrompt, req.Temperature, req.TopP, req.MaxTokens)
 	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
 
 	if req.Stream {
-		if err := h.streamText(c, worker, genReq, req.Model, includeUsage, start); err != nil {
+		worker, err := h.streamTextFailover(c, workers, genReq, req.Model, includeUsage, start)
+		if worker != nil {
+			h.observeLatency(worker.ID, start)
+		}
+		if err != nil {
 			if !c.Writer.Written() {
 				httpStatus, msg, typ, code := mapGRPCError(err)
 				statusCode = httpStatus
@@ -259,7 +283,10 @@ func (h *Handler) completions(c *gin.Context) {
 		return
 	}
 
-	text, usage, finish, err := h.collect(c.Request.Context(), worker, genReq)
+	text, usage, finish, worker, err := h.collectWithFailover(c.Request.Context(), workers, genReq)
+	if worker != nil {
+		h.observeLatency(worker.ID, start)
+	}
 	if err != nil {
 		httpStatus, msg, typ, code := mapGRPCError(err)
 		statusCode = httpStatus
@@ -284,17 +311,12 @@ func (h *Handler) completions(c *gin.Context) {
 	})
 }
 
-func (h *Handler) streamChat(c *gin.Context, worker *SelectedWorker, genReq *workerv1.GenerateRequest, model string, includeUsage bool, start time.Time) error {
-	client, closer, err := h.dial(c.Request.Context(), worker.Endpoint)
+func (h *Handler) streamChatFailover(c *gin.Context, workers []SelectedWorker, genReq *workerv1.GenerateRequest, model string, includeUsage bool, start time.Time) (*SelectedWorker, error) {
+	stream, closer, worker, firstChunk, err := h.streamFirstToken(c.Request.Context(), workers, genReq)
 	if err != nil {
-		return status.Errorf(codes.Unavailable, "dial worker: %v", err)
+		return worker, err
 	}
 	defer closer()
-
-	stream, err := client.Generate(c.Request.Context(), genReq)
-	if err != nil {
-		return err
-	}
 
 	setSSEHeaders(c.Writer)
 	c.Status(http.StatusOK)
@@ -302,35 +324,21 @@ func (h *Handler) streamChat(c *gin.Context, worker *SelectedWorker, genReq *wor
 
 	id := newCompletionID("chatcmpl")
 	created := time.Now().Unix()
-	first := true
+	h.metrics.ObserveTTFT("chat_completions", model, time.Since(start).Seconds())
+	roleChunk := chatCompletionChunk{
+		ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
+		Choices: []chatChunkChoice{{Index: 0, Delta: chatDelta{Role: "assistant"}}},
+	}
+	if err := writeSSEData(c.Writer, flusher, roleChunk); err != nil {
+		return worker, err
+	}
+
 	var finalUsage *usage
 	var finishReason string
-
-	for {
-		chunk, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			if first {
-				return err
-			}
-			_ = writeSSEError(c.Writer, flusher, err.Error())
+	handle := func(chunk *workerv1.TokenChunk) error {
+		if chunk == nil {
 			return nil
 		}
-
-		if first {
-			first = false
-			h.metrics.ObserveTTFT("chat_completions", model, time.Since(start).Seconds())
-			roleChunk := chatCompletionChunk{
-				ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
-				Choices: []chatChunkChoice{{Index: 0, Delta: chatDelta{Role: "assistant"}}},
-			}
-			if err := writeSSEData(c.Writer, flusher, roleChunk); err != nil {
-				return err
-			}
-		}
-
 		if chunk.GetText() != "" {
 			msg := chatCompletionChunk{
 				ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
@@ -340,7 +348,6 @@ func (h *Handler) streamChat(c *gin.Context, worker *SelectedWorker, genReq *wor
 				return err
 			}
 		}
-
 		if chunk.GetDone() {
 			finishReason = chunk.GetFinishReason()
 			if finishReason == "" {
@@ -354,6 +361,23 @@ func (h *Handler) streamChat(c *gin.Context, worker *SelectedWorker, genReq *wor
 				}
 			}
 		}
+		return nil
+	}
+	if err := handle(firstChunk); err != nil {
+		return worker, err
+	}
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			_ = writeSSEError(c.Writer, flusher, err.Error())
+			return worker, nil
+		}
+		if err := handle(chunk); err != nil {
+			return worker, err
+		}
 	}
 
 	fr := finishReason
@@ -365,9 +389,8 @@ func (h *Handler) streamChat(c *gin.Context, worker *SelectedWorker, genReq *wor
 		Choices: []chatChunkChoice{{Index: 0, Delta: chatDelta{}, FinishReason: &fr}},
 	}
 	if err := writeSSEData(c.Writer, flusher, stopChunk); err != nil {
-		return err
+		return worker, err
 	}
-
 	if includeUsage && finalUsage != nil {
 		usageChunk := chatCompletionChunk{
 			ID: id, Object: "chat.completion.chunk", Created: created, Model: model,
@@ -375,23 +398,18 @@ func (h *Handler) streamChat(c *gin.Context, worker *SelectedWorker, genReq *wor
 			Usage:   finalUsage,
 		}
 		if err := writeSSEData(c.Writer, flusher, usageChunk); err != nil {
-			return err
+			return worker, err
 		}
 	}
-	return writeSSEDone(c.Writer, flusher)
+	return worker, writeSSEDone(c.Writer, flusher)
 }
 
-func (h *Handler) streamText(c *gin.Context, worker *SelectedWorker, genReq *workerv1.GenerateRequest, model string, includeUsage bool, start time.Time) error {
-	client, closer, err := h.dial(c.Request.Context(), worker.Endpoint)
+func (h *Handler) streamTextFailover(c *gin.Context, workers []SelectedWorker, genReq *workerv1.GenerateRequest, model string, includeUsage bool, start time.Time) (*SelectedWorker, error) {
+	stream, closer, worker, firstChunk, err := h.streamFirstToken(c.Request.Context(), workers, genReq)
 	if err != nil {
-		return status.Errorf(codes.Unavailable, "dial worker: %v", err)
+		return worker, err
 	}
 	defer closer()
-
-	stream, err := client.Generate(c.Request.Context(), genReq)
-	if err != nil {
-		return err
-	}
 
 	setSSEHeaders(c.Writer)
 	c.Status(http.StatusOK)
@@ -399,25 +417,13 @@ func (h *Handler) streamText(c *gin.Context, worker *SelectedWorker, genReq *wor
 
 	id := newCompletionID("cmpl")
 	created := time.Now().Unix()
-	first := true
+	h.metrics.ObserveTTFT("completions", model, time.Since(start).Seconds())
+
 	var finalUsage *usage
 	var finishReason string
-
-	for {
-		chunk, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			if first {
-				return err
-			}
-			_ = writeSSEError(c.Writer, flusher, err.Error())
+	handle := func(chunk *workerv1.TokenChunk) error {
+		if chunk == nil {
 			return nil
-		}
-		if first {
-			first = false
-			h.metrics.ObserveTTFT("completions", model, time.Since(start).Seconds())
 		}
 		if chunk.GetText() != "" {
 			msg := textCompletionChunk{
@@ -441,8 +447,24 @@ func (h *Handler) streamText(c *gin.Context, worker *SelectedWorker, genReq *wor
 				}
 			}
 		}
+		return nil
 	}
-
+	if err := handle(firstChunk); err != nil {
+		return worker, err
+	}
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			_ = writeSSEError(c.Writer, flusher, err.Error())
+			return worker, nil
+		}
+		if err := handle(chunk); err != nil {
+			return worker, err
+		}
+	}
 	fr := finishReason
 	if fr == "" {
 		fr = "stop"
@@ -452,7 +474,7 @@ func (h *Handler) streamText(c *gin.Context, worker *SelectedWorker, genReq *wor
 		Choices: []textCompletionChoice{{Index: 0, Text: "", FinishReason: &fr}},
 	}
 	if err := writeSSEData(c.Writer, flusher, stopChunk); err != nil {
-		return err
+		return worker, err
 	}
 	if includeUsage && finalUsage != nil {
 		usageChunk := textCompletionChunk{
@@ -461,10 +483,10 @@ func (h *Handler) streamText(c *gin.Context, worker *SelectedWorker, genReq *wor
 			Usage:   finalUsage,
 		}
 		if err := writeSSEData(c.Writer, flusher, usageChunk); err != nil {
-			return err
+			return worker, err
 		}
 	}
-	return writeSSEDone(c.Writer, flusher)
+	return worker, writeSSEDone(c.Writer, flusher)
 }
 
 func (h *Handler) collect(ctx context.Context, worker *SelectedWorker, genReq *workerv1.GenerateRequest) (string, *usage, string, error) {
