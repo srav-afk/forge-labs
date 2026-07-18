@@ -1,5 +1,9 @@
 related-repos/
 
+.agents/
+.claude/
+.grok/
+
 bin/
 dist/
 *.exe

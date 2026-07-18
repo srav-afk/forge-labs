@@ -22,6 +22,7 @@ import (
 
 	workerv1 "github.com/srav-afk/forge-labs/gen/worker/v1"
 	"github.com/srav-afk/forge-labs/internal/observability"
+	"github.com/srav-afk/forge-labs/services/routing"
 )
 
 type staticSelector struct {
@@ -63,7 +64,8 @@ func testHandler(t *testing.T, fw *fakeWorker) (*Handler, *httptest.Server) {
 
 	reg := observability.NewRegistry()
 	m := NewMetrics(reg)
-	h := NewHandler(staticSelector{w: &SelectedWorker{ID: "w1", Endpoint: "bufnet", Models: []string{"llama3.2"}}}, m)
+	inf := routing.NewInflightTracker()
+	h := NewHandler(staticSelector{w: &SelectedWorker{ID: "w1", Endpoint: "bufnet", Models: []string{"llama3.2"}}}, inf, m)
 	h.dial = func(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error) {
 		conn, err := grpc.NewClient("passthrough:///bufnet",
 			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
@@ -180,7 +182,7 @@ func TestStreamCancelPropagates(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	reg := observability.NewRegistry()
-	h := NewHandler(staticSelector{w: &SelectedWorker{Endpoint: "bufnet"}}, NewMetrics(reg))
+	h := NewHandler(staticSelector{w: &SelectedWorker{ID: "w1", Endpoint: "bufnet"}}, routing.NewInflightTracker(), NewMetrics(reg))
 	h.dial = func(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error) {
 		conn, err := grpc.NewClient("passthrough:///bufnet",
 			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),

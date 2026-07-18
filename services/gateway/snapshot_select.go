@@ -1,21 +1,39 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/srav-afk/forge-labs/services/routing"
+	"github.com/srav-afk/forge-labs/services/scheduler"
 )
 
-var ErrNoSnapshot = errors.New("no snapshot yet")
+var (
+	ErrNoSnapshot = errors.New("no snapshot yet")
+	errNoCapacity = scheduler.ErrNoCapacity
+)
 
 type SnapshotSelector struct {
-	holder *routing.SnapshotHolder
+	holder   *routing.SnapshotHolder
+	inflight *routing.InflightTracker
+	chain    *scheduler.Chain
+	metrics  *scheduler.Metrics
 }
 
-func NewSnapshotSelector(holder *routing.SnapshotHolder) *SnapshotSelector {
-	return &SnapshotSelector{holder: holder}
+func NewSnapshotSelector(
+	holder *routing.SnapshotHolder,
+	inflight *routing.InflightTracker,
+	chain *scheduler.Chain,
+	metrics *scheduler.Metrics,
+) *SnapshotSelector {
+	return &SnapshotSelector{
+		holder:   holder,
+		inflight: inflight,
+		chain:    chain,
+		metrics:  metrics,
+	}
 }
 
 func (s *SnapshotSelector) SelectWorker(model string) (*SelectedWorker, error) {
@@ -25,64 +43,26 @@ func (s *SnapshotSelector) SelectWorker(model string) (*SelectedWorker, error) {
 	}
 
 	base, adapter := ParseModelID(model)
-	var (
-		match   *routing.WorkerView
-		anyLive *routing.WorkerView
-	)
-	for i := range snap.Workers {
-		w := &snap.Workers[i]
-		if !w.Healthy {
-			continue
-		}
-		if anyLive == nil {
-			anyLive = w
-		}
-		if modelMatches(w, base, adapter, model) {
-			if w.Ready || match == nil {
-				match = w
-				if w.Ready {
-					break
-				}
-			}
-		}
-	}
-	if match == nil && anyLive != nil && len(snap.Workers) == 1 {
-		match = anyLive
-	}
-	if match == nil {
-		return nil, fmt.Errorf("no worker for model %q", model)
-	}
-	return selectedFromView(match), nil
-}
+	req := &scheduler.Request{BaseModel: base, Adapter: adapter}
+	candidates := scheduler.CandidatesFromSnapshot(snap, s.inflight)
 
-func modelMatches(w *routing.WorkerView, base, adapter, model string) bool {
-	id := w.BaseModel
-	if w.Adapter != "" {
-		id = w.BaseModel + "#" + w.Adapter
-	}
-	if id == model {
-		return true
-	}
-	if w.BaseModel == base && (adapter == "" || w.Adapter == adapter) {
-		return true
-	}
-	return w.BaseModel == model
-}
-
-func selectedFromView(w *routing.WorkerView) *SelectedWorker {
-	models := []string{}
-	if w.BaseModel != "" {
-		id := w.BaseModel
-		if w.Adapter != "" {
-			id = w.BaseModel + "#" + w.Adapter
+	pick, err := s.chain.Pick(context.Background(), req, candidates)
+	if err != nil {
+		if errors.Is(err, scheduler.ErrNoCapacity) {
+			return nil, fmt.Errorf("%w: model %q", scheduler.ErrNoCapacity, model)
 		}
-		models = append(models, id)
+		return nil, err
 	}
+
+	if s.metrics != nil {
+		s.metrics.IncDispatched(pick.WorkerID, model)
+	}
+
 	return &SelectedWorker{
-		ID:       w.ID,
-		Endpoint: w.Endpoint,
-		Models:   models,
-	}
+		ID:       pick.WorkerID,
+		Endpoint: pick.Endpoint,
+		Models:   []string{model},
+	}, nil
 }
 
 func (s *SnapshotSelector) ListModels() []modelObject {
@@ -116,4 +96,8 @@ func (s *SnapshotSelector) ListModels() []modelObject {
 		})
 	}
 	return out
+}
+
+func (s *SnapshotSelector) Inflight() *routing.InflightTracker {
+	return s.inflight
 }

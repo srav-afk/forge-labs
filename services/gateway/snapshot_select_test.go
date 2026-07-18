@@ -6,10 +6,15 @@ import (
 	"time"
 
 	"github.com/srav-afk/forge-labs/services/routing"
+	"github.com/srav-afk/forge-labs/services/scheduler"
 )
 
+func newTestSelector(h *routing.SnapshotHolder) *SnapshotSelector {
+	return NewSnapshotSelector(h, routing.NewInflightTracker(), scheduler.DefaultChain(), nil)
+}
+
 func TestSnapshotSelectorNoSnapshot(t *testing.T) {
-	s := NewSnapshotSelector(routing.NewSnapshotHolder())
+	s := newTestSelector(routing.NewSnapshotHolder())
 	_, err := s.SelectWorker("qwen3:8b")
 	if !errors.Is(err, ErrNoSnapshot) {
 		t.Fatalf("err=%v", err)
@@ -29,7 +34,7 @@ func TestSnapshotSelectorPicksHealthyReady(t *testing.T) {
 			{ID: "live", Endpoint: "127.0.0.1:50051", BaseModel: "qwen3:8b", Healthy: true, Ready: true, QueueDepth: 2},
 		},
 	})
-	s := NewSnapshotSelector(h)
+	s := newTestSelector(h)
 	w, err := s.SelectWorker("qwen3:8b")
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +48,25 @@ func TestSnapshotSelectorPicksHealthyReady(t *testing.T) {
 	}
 }
 
+func TestSnapshotSelectorLeastLoaded(t *testing.T) {
+	h := routing.NewSnapshotHolder()
+	h.Store(&routing.RoutingSnapshot{
+		Epoch: 1,
+		Workers: []routing.WorkerView{
+			{ID: "busy", Endpoint: "b", BaseModel: "m", Healthy: true, Ready: true, InFlight: 4},
+			{ID: "idle", Endpoint: "i", BaseModel: "m", Healthy: true, Ready: true, InFlight: 0},
+		},
+	})
+	s := newTestSelector(h)
+	w, err := s.SelectWorker("m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.ID != "idle" {
+		t.Fatalf("got %s", w.ID)
+	}
+}
+
 func TestSnapshotSelectorHotPathIsMemoryOnly(t *testing.T) {
 	h := routing.NewSnapshotHolder()
 	h.Store(&routing.RoutingSnapshot{
@@ -51,10 +75,25 @@ func TestSnapshotSelectorHotPathIsMemoryOnly(t *testing.T) {
 			{ID: "w1", Endpoint: "127.0.0.1:50051", BaseModel: "m", Healthy: true, Ready: true},
 		},
 	})
-	s := NewSnapshotSelector(h)
+	s := newTestSelector(h)
 	for i := 0; i < 1000; i++ {
 		if _, err := s.SelectWorker("m"); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestSnapshotSelectorNoCapacity(t *testing.T) {
+	h := routing.NewSnapshotHolder()
+	h.Store(&routing.RoutingSnapshot{
+		Epoch: 1,
+		Workers: []routing.WorkerView{
+			{ID: "w1", Endpoint: "e", BaseModel: "other", Healthy: true, Ready: true},
+		},
+	})
+	s := newTestSelector(h)
+	_, err := s.SelectWorker("missing")
+	if !errors.Is(err, scheduler.ErrNoCapacity) {
+		t.Fatalf("err=%v", err)
 	}
 }

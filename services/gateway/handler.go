@@ -18,20 +18,30 @@ import (
 	"google.golang.org/grpc/status"
 
 	workerv1 "github.com/srav-afk/forge-labs/gen/worker/v1"
+	"github.com/srav-afk/forge-labs/services/routing"
 )
 
 type Handler struct {
 	selector WorkerSelector
+	inflight *routing.InflightTracker
 	metrics  *Metrics
 	dial     func(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error)
 }
 
-func NewHandler(selector WorkerSelector, metrics *Metrics) *Handler {
+func NewHandler(selector WorkerSelector, inflight *routing.InflightTracker, metrics *Metrics) *Handler {
 	return &Handler{
 		selector: selector,
+		inflight: inflight,
 		metrics:  metrics,
 		dial:     dialWorker,
 	}
+}
+
+func (h *Handler) track(workerID string) func() {
+	if h.inflight == nil {
+		return func() {}
+	}
+	return h.inflight.Track(workerID)
 }
 
 func (h *Handler) Register(r *gin.Engine) {
@@ -82,6 +92,8 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		writeOpenAIError(c, statusCode, err.Error(), typ, code)
 		return
 	}
+	done := h.track(worker.ID)
+	defer done()
 
 	prompt := messagesToPrompt(req.Messages)
 	genReq := toWorkerRequest(req.Model, prompt, req.Temperature, req.TopP, maxTokensFromChat(req))
@@ -150,6 +162,8 @@ func (h *Handler) completions(c *gin.Context) {
 		writeOpenAIError(c, statusCode, err.Error(), typ, code)
 		return
 	}
+	done := h.track(worker.ID)
+	defer done()
 
 	genReq := toWorkerRequest(req.Model, prompt, req.Temperature, req.TopP, req.MaxTokens)
 	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage

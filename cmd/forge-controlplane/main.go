@@ -29,6 +29,7 @@ import (
 	"github.com/srav-afk/forge-labs/services/registry"
 	registryimpl "github.com/srav-afk/forge-labs/services/registry/impl"
 	"github.com/srav-afk/forge-labs/services/routing"
+	"github.com/srav-afk/forge-labs/services/scheduler"
 )
 
 const version = "0.1.0"
@@ -53,6 +54,7 @@ func main() {
 		return health.NewService(rdb, m, config.Duration(k, "heartbeat.reconcile", 3*time.Second))
 	}))
 	must(c.Provide(routing.NewSnapshotHolder))
+	must(c.Provide(routing.NewInflightTracker))
 	must(c.Provide(func(reg *observability.Registry, holder *routing.SnapshotHolder) *routing.Metrics {
 		return routing.NewMetrics(reg, holder)
 	}))
@@ -73,9 +75,18 @@ func main() {
 			config.Duration(k, "routing.snapshot.interval", 500*time.Millisecond),
 		)
 	}))
+	must(c.Provide(scheduler.NewMetrics))
+	must(c.Provide(func() *scheduler.Chain {
+		return scheduler.DefaultChain()
+	}))
 	must(c.Provide(gateway.NewMetrics))
-	must(c.Provide(func(holder *routing.SnapshotHolder) gateway.WorkerSelector {
-		return gateway.NewSnapshotSelector(holder)
+	must(c.Provide(func(
+		holder *routing.SnapshotHolder,
+		inflight *routing.InflightTracker,
+		chain *scheduler.Chain,
+		sm *scheduler.Metrics,
+	) gateway.WorkerSelector {
+		return gateway.NewSnapshotSelector(holder, inflight, chain, sm)
 	}))
 	must(c.Provide(gateway.NewHandler))
 

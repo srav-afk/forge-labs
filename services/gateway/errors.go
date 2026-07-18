@@ -13,6 +13,9 @@ func selectErrorStatus(err error) (httpStatus int, errType, code string) {
 	if errors.Is(err, ErrNoSnapshot) {
 		return http.StatusServiceUnavailable, "server_error", "no_snapshot"
 	}
+	if errors.Is(err, errNoCapacity) {
+		return http.StatusServiceUnavailable, "server_error", "no_capacity"
+	}
 	return http.StatusNotFound, "invalid_request_error", "model_not_found"
 }
 
