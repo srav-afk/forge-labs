@@ -8,6 +8,7 @@ import (
 	"ariga.io/atlas-provider-gorm/gormschema"
 
 	"github.com/srav-afk/forge-labs/services/catalog"
+	"github.com/srav-afk/forge-labs/services/planner"
 	"github.com/srav-afk/forge-labs/services/registry/models"
 )
 
@@ -17,6 +18,8 @@ func main() {
 		&models.ServableModel{},
 		&catalog.Model{},
 		&catalog.ModelAssignment{},
+		&planner.Objective{},
+		&planner.Decision{},
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load gorm schema: %v\n", err)

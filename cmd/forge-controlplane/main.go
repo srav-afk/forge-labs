@@ -28,6 +28,7 @@ import (
 	"github.com/srav-afk/forge-labs/services/gateway"
 	"github.com/srav-afk/forge-labs/services/gateway/reliability"
 	"github.com/srav-afk/forge-labs/services/health"
+	"github.com/srav-afk/forge-labs/services/planner"
 	"github.com/srav-afk/forge-labs/services/registry"
 	registryimpl "github.com/srav-afk/forge-labs/services/registry/impl"
 	"github.com/srav-afk/forge-labs/services/routing"
@@ -61,6 +62,7 @@ func main() {
 		return health.NewService(rdb, m, config.Duration(k, "heartbeat.reconcile", 3*time.Second))
 	}))
 	must(c.Provide(routing.NewSnapshotHolder))
+	must(c.Provide(routing.NewPolicyHolder))
 	must(c.Provide(routing.NewInflightTracker))
 	must(c.Provide(func(reg *observability.Registry, holder *routing.SnapshotHolder) *routing.Metrics {
 		return routing.NewMetrics(reg, holder)
@@ -82,21 +84,35 @@ func main() {
 			config.Duration(k, "routing.snapshot.interval", 500*time.Millisecond),
 		)
 	}))
+	must(c.Provide(planner.NewObjectiveStore))
+	must(c.Provide(func(db *gorm.DB, rdb *redis.Client) *planner.PolicyStore {
+		return planner.NewPolicyStore(db, rdb)
+	}))
+	must(c.Provide(func(
+		obj *planner.ObjectiveStore,
+		pol *planner.PolicyStore,
+		holder *routing.SnapshotHolder,
+		ph *routing.PolicyHolder,
+	) *planner.Service {
+		return planner.NewService(obj, pol, holder, ph)
+	}))
 	must(c.Provide(scheduler.NewMetrics))
 	must(c.Provide(func(sm *scheduler.Metrics, k *koanf.Koanf) *scheduler.LatencyStore {
 		return scheduler.NewLatencyStore(config.Duration(k, "scheduler.ewma.tau", 10*time.Second), sm)
 	}))
-	must(c.Provide(func(sm *scheduler.Metrics, k *koanf.Koanf) *scheduler.Chain {
+	must(c.Provide(func(sm *scheduler.Metrics, ph *routing.PolicyHolder, k *koanf.Koanf) *scheduler.Chain {
 		return scheduler.NewConfiguredChain(scheduler.ChainConfig{
 			WeightLoad:     k.Float64("scheduler.weight.load"),
 			WeightLatency:  k.Float64("scheduler.weight.latency"),
 			WeightAffinity: k.Float64("scheduler.weight.affinity"),
 			WeightCost:     k.Float64("scheduler.weight.cost"),
+			WeightPolicy:   0.2,
 			LatencyRefMs:   k.Float64("scheduler.latency.ref.ms"),
 			AdmissionLimit: k.Int("admission.per.worker.limit"),
 			AffinityWindow: k.Int("affinity.prefix.window"),
 			AffinityBlock:  k.Int("affinity.block.bytes"),
 			Metrics:        sm,
+			Policy:         scheduler.NewPolicyScorer(ph),
 		})
 	}))
 	must(c.Provide(gateway.NewMetrics))
@@ -173,6 +189,8 @@ func run(
 	rm *routing.Metrics,
 	pub *routing.Publisher,
 	catalogSvc *catalog.Service,
+	plannerSvc *planner.Service,
+	policyHolder *routing.PolicyHolder,
 	gw *gateway.Handler,
 ) error {
 	defer rdb.Close()
@@ -203,7 +221,9 @@ func run(
 
 	healthSvc.Start(ctx)
 	catalogSvc.Start(ctx)
+	plannerSvc.Start(ctx)
 	go routing.RunSubscriber(ctx, rdb, holder, rm)
+	go routing.RunPolicySubscriber(ctx, rdb, policyHolder)
 	pub.Start(ctx)
 
 	go serveMetrics(k.String("metrics.addr"), reg)
