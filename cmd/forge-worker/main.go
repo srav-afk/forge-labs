@@ -214,20 +214,17 @@ func registerWithControlPlane(cfg *koanf.Koanf) {
 	if caps == nil {
 		caps = map[string]string{}
 	}
-	if _, ok := caps["cost_per_hour"]; !ok {
-		caps["cost_per_hour"] = strconv.FormatFloat(cfg.Float64("worker.cost.per.hour"), 'f', -1, 64)
-	}
-	if _, ok := caps["cost_class"]; !ok {
-		class := cfg.String("worker.cost.class")
-		if class == "" {
-			if cfg.Float64("worker.cost.per.hour") > 0 {
-				class = "paid"
-			} else {
-				class = "free"
-			}
+	costHr := cfg.Float64("worker.cost.per.hour")
+	caps["cost_per_hour"] = strconv.FormatFloat(costHr, 'f', -1, 64)
+	class := cfg.String("worker.cost.class")
+	if class == "" {
+		if costHr > 0 {
+			class = "paid"
+		} else {
+			class = "free"
 		}
-		caps["cost_class"] = class
 	}
+	caps["cost_class"] = class
 	if _, ok := caps["runtime"]; !ok {
 		caps["runtime"] = config.RuntimeLabel(cfg.String("worker.runtime"))
 	}
