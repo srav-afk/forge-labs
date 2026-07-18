@@ -20,7 +20,7 @@ func newTestSelectorWithCatalog(h *routing.SnapshotHolder, cat *catalog.Snapshot
 
 func TestSnapshotSelectorNoSnapshot(t *testing.T) {
 	s := newTestSelector(routing.NewSnapshotHolder())
-	_, err := s.SelectWorker("qwen3:8b", "hi")
+	_, err := s.SelectWorker("qwen3.6:27b", "hi")
 	if !errors.Is(err, ErrNoSnapshot) {
 		t.Fatalf("err=%v", err)
 	}
@@ -35,12 +35,12 @@ func TestSnapshotSelectorPicksHealthyReady(t *testing.T) {
 		BuiltAt: time.Now(),
 		Epoch:   1,
 		Workers: []routing.WorkerView{
-			{ID: "dead", Endpoint: "127.0.0.1:1", BaseModel: "qwen3:8b", Healthy: false, Ready: false},
-			{ID: "live", Endpoint: "127.0.0.1:50051", BaseModel: "qwen3:8b", Healthy: true, Ready: true, QueueDepth: 2},
+			{ID: "dead", Endpoint: "127.0.0.1:1", BaseModel: "qwen3.6:27b", Healthy: false, Ready: false},
+			{ID: "live", Endpoint: "127.0.0.1:50051", BaseModel: "qwen3.6:27b", Healthy: true, Ready: true, QueueDepth: 2},
 		},
 	})
 	s := newTestSelector(h)
-	w, err := s.SelectWorker("qwen3:8b", "hi")
+	w, err := s.SelectWorker("qwen3.6:27b", "hi")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,16 +137,16 @@ func TestCatalogRoutesByAssignment(t *testing.T) {
 	h.Store(&routing.RoutingSnapshot{
 		Epoch: 1,
 		Workers: []routing.WorkerView{
-			{ID: "workerA", Endpoint: "a:1", BaseModel: "qwen3:8b", Healthy: true, Ready: true},
-			{ID: "workerB", Endpoint: "b:1", BaseModel: "qwen3:32b", Healthy: true, Ready: true},
+			{ID: "workerA", Endpoint: "a:1", BaseModel: "qwen3.6:27b", Healthy: true, Ready: true},
+			{ID: "workerB", Endpoint: "b:1", BaseModel: "gemma4:12b", Healthy: true, Ready: true},
 		},
 	})
 	cat := catalog.NewSnapshotHolder()
 	cat.Store(&catalog.Snapshot{
 		BuiltAt: time.Now(),
 		ByName: map[string]catalog.ModelIdentity{
-			"qwen3:8b":  {ID: "m1", Name: "qwen3:8b", BaseModel: "qwen3:8b"},
-			"qwen3:32b": {ID: "m2", Name: "qwen3:32b", BaseModel: "qwen3:32b"},
+			"qwen3.6:27b": {ID: "m1", Name: "qwen3.6:27b", BaseModel: "qwen3.6:27b"},
+			"gemma4:12b":  {ID: "m2", Name: "gemma4:12b", BaseModel: "gemma4:12b"},
 		},
 		WorkersByModel: map[string][]string{
 			"m1": {"workerA"},
@@ -155,19 +155,19 @@ func TestCatalogRoutesByAssignment(t *testing.T) {
 	})
 	s := newTestSelectorWithCatalog(h, cat)
 
-	w, err := s.SelectWorker("qwen3:32b", "hi")
+	w, err := s.SelectWorker("gemma4:12b", "hi")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if w.ID != "workerB" {
-		t.Fatalf("qwen3:32b -> %s want workerB", w.ID)
+		t.Fatalf("gemma4:12b -> %s want workerB", w.ID)
 	}
-	w, err = s.SelectWorker("qwen3:8b", "hi")
+	w, err = s.SelectWorker("qwen3.6:27b", "hi")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if w.ID != "workerA" {
-		t.Fatalf("qwen3:8b -> %s want workerA", w.ID)
+		t.Fatalf("qwen3.6:27b -> %s want workerA", w.ID)
 	}
 }
 
@@ -203,20 +203,20 @@ func TestCatalogSkipsAssignedButDown(t *testing.T) {
 	h.Store(&routing.RoutingSnapshot{
 		Epoch: 1,
 		Workers: []routing.WorkerView{
-			{ID: "workerB", Endpoint: "b:1", BaseModel: "qwen3:32b", Healthy: false, Ready: false},
-			{ID: "workerA", Endpoint: "a:1", BaseModel: "qwen3:32b", Healthy: true, Ready: true},
+			{ID: "workerB", Endpoint: "b:1", BaseModel: "gemma4:12b", Healthy: false, Ready: false},
+			{ID: "workerA", Endpoint: "a:1", BaseModel: "gemma4:12b", Healthy: true, Ready: true},
 		},
 	})
 	cat := catalog.NewSnapshotHolder()
 	cat.Store(&catalog.Snapshot{
 		BuiltAt: time.Now(),
 		ByName: map[string]catalog.ModelIdentity{
-			"qwen3:32b": {ID: "m2", Name: "qwen3:32b", BaseModel: "qwen3:32b"},
+			"gemma4:12b": {ID: "m2", Name: "gemma4:12b", BaseModel: "gemma4:12b"},
 		},
 		WorkersByModel: map[string][]string{"m2": {"workerB"}},
 	})
 	s := newTestSelectorWithCatalog(h, cat)
-	_, err := s.SelectWorker("qwen3:32b", "hi")
+	_, err := s.SelectWorker("gemma4:12b", "hi")
 	if !errors.Is(err, scheduler.ErrNoCapacity) && !errors.Is(err, ErrNoLiveAssignee) {
 		t.Fatalf("err=%v want no live capacity", err)
 	}

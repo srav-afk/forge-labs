@@ -22,8 +22,8 @@ func TestKeyRoundTrip(t *testing.T) {
 func TestSnapshotRoutable(t *testing.T) {
 	s := NewSnapshot()
 	s.Replace(map[string]Heartbeat{
-		"a": {ID: "a", BaseModel: "qwen3:8b", Runtime: "ollama", Ready: true, TS: time.Now().UnixMilli()},
-		"b": {ID: "b", BaseModel: "qwen3:8b", Runtime: "ollama", Ready: false, TS: time.Now().UnixMilli()},
+		"a": {ID: "a", BaseModel: "qwen3.6:27b", Runtime: "ollama", Ready: true, TS: time.Now().UnixMilli()},
+		"b": {ID: "b", BaseModel: "qwen3.6:27b", Runtime: "ollama", Ready: false, TS: time.Now().UnixMilli()},
 	})
 	all := s.All()
 	if len(all) != 2 {

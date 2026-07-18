@@ -36,12 +36,12 @@ func TestGenerateStreamsSSE(t *testing.T) {
 
 	a := New(Config{
 		BaseURL:     srv.URL,
-		ServedModel: "Qwen/Qwen3-235B-A22B",
-		ForgeModel:  "qwen3-235b-a22b",
+		ServedModel: "zai-org/GLM-5.2",
+		ForgeModel:  "glm-5.2",
 	})
 	var got []adapters.TokenChunk
 	err := a.Generate(context.Background(), adapters.GenerateRequest{
-		Model:  "qwen3-235b-a22b",
+		Model:  "glm-5.2",
 		Prompt: "hi",
 	}, func(c adapters.TokenChunk) error {
 		got = append(got, c)
@@ -64,20 +64,20 @@ func TestGenerateStreamsSSE(t *testing.T) {
 
 func TestCapabilitiesNormalizesModel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"data":[{"id":"Qwen/Qwen3-235B-A22B"}]}`)
+		_, _ = io.WriteString(w, `{"data":[{"id":"zai-org/GLM-5.2"}]}`)
 	}))
 	defer srv.Close()
 
 	a := New(Config{
 		BaseURL:     srv.URL,
-		ServedModel: "Qwen/Qwen3-235B-A22B",
-		ForgeModel:  "qwen3-235b-a22b",
+		ServedModel: "zai-org/GLM-5.2",
+		ForgeModel:  "glm-5.2",
 	})
 	caps, err := a.Capabilities(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if caps.Runtime != "vllm" || len(caps.Models) != 1 || caps.Models[0].BaseModel != "qwen3-235b-a22b" {
+	if caps.Runtime != "vllm" || len(caps.Models) != 1 || caps.Models[0].BaseModel != "glm-5.2" {
 		t.Fatalf("%+v", caps)
 	}
 }

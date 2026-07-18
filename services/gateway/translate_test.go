@@ -3,8 +3,8 @@ package gateway
 import "testing"
 
 func TestParseModelID(t *testing.T) {
-	base, adapter := ParseModelID("qwen3:8b")
-	if base != "qwen3:8b" || adapter != "" {
+	base, adapter := ParseModelID("qwen3.6:27b")
+	if base != "qwen3.6:27b" || adapter != "" {
 		t.Fatalf("got %q %q", base, adapter)
 	}
 	base, adapter = ParseModelID("llama3.2#sql")
