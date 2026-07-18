@@ -13,9 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/status"
 
 	workerv1 "github.com/srav-afk/forge-labs/gen/worker/v1"
 	"github.com/srav-afk/forge-labs/internal/observability"
@@ -545,16 +543,11 @@ func (h *Handler) streamTextFailover(c *gin.Context, workers []SelectedWorker, g
 }
 
 func (h *Handler) collect(ctx context.Context, worker *SelectedWorker, genReq *workerv1.GenerateRequest) (string, *usage, string, error) {
-	client, closer, err := h.dial(ctx, worker.Endpoint)
-	if err != nil {
-		return "", nil, "", status.Errorf(codes.Unavailable, "dial worker: %v", err)
-	}
-	defer closer()
-
-	stream, err := client.Generate(ctx, genReq)
+	stream, closer, err := h.openGenerate(ctx, worker, genReq)
 	if err != nil {
 		return "", nil, "", err
 	}
+	defer closer()
 
 	var b strings.Builder
 	var u *usage

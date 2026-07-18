@@ -18,6 +18,8 @@ gen/**/*.pb.go
 .env
 *.local.env
 development.local.env
+*.secrets.env
+development.secrets.env
 
 __pycache__/
 *.py[cod]

@@ -57,13 +57,26 @@ func (h *Handler) openProviderStream(ctx context.Context, worker *SelectedWorker
 		return nil, nil, io.ErrUnexpectedEOF
 	}
 	model := genReq.GetModel().GetBaseModel()
+	opts := map[string]any{}
+	if s := genReq.GetSampling(); s != nil {
+		if s.GetTemperature() != 0 {
+			opts["temperature"] = float64(s.GetTemperature())
+		}
+		if s.GetTopP() != 0 {
+			opts["top_p"] = float64(s.GetTopP())
+		}
+		if s.GetMaxTokens() > 0 {
+			opts["num_predict"] = int(s.GetMaxTokens())
+		}
+	}
 	ch := make(chan *workerv1.TokenChunk, 16)
 	stream := &chunkStream{ch: ch, ctx: ctx}
 	go func() {
 		defer close(ch)
 		err := backend.Generate(ctx, adapters.GenerateRequest{
-			Model:  model,
-			Prompt: genReq.GetPrompt(),
+			Model:   model,
+			Prompt:  genReq.GetPrompt(),
+			Options: opts,
 		}, func(c adapters.TokenChunk) error {
 			msg := &workerv1.TokenChunk{Text: c.Text, Done: c.Done, FinishReason: c.FinishReason}
 			if c.Done {
