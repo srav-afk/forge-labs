@@ -26,6 +26,7 @@ type ChainConfig struct {
 	WeightLoad     float64
 	WeightLatency  float64
 	WeightAffinity float64
+	WeightCost     float64
 	LatencyRefMs   float64
 	AdmissionLimit int
 	AffinityWindow int
@@ -35,9 +36,10 @@ type ChainConfig struct {
 
 func DefaultChain() *Chain {
 	return NewConfiguredChain(ChainConfig{
-		WeightLoad:     0.6,
-		WeightLatency:  0.2,
-		WeightAffinity: 0.2,
+		WeightLoad:     0.5,
+		WeightLatency:  0.15,
+		WeightAffinity: 0.15,
+		WeightCost:     0.2,
 		LatencyRefMs:   100,
 		AdmissionLimit: 4,
 		AffinityWindow: 1024,
@@ -46,13 +48,14 @@ func DefaultChain() *Chain {
 }
 
 func NewConfiguredChain(cfg ChainConfig) *Chain {
-	wl, wlat, waff := cfg.WeightLoad, cfg.WeightLatency, cfg.WeightAffinity
-	if wl <= 0 && wlat <= 0 && waff <= 0 {
-		wl, wlat, waff = 0.6, 0.2, 0.2
+	wl, wlat, waff, wc := cfg.WeightLoad, cfg.WeightLatency, cfg.WeightAffinity, cfg.WeightCost
+	if wl <= 0 && wlat <= 0 && waff <= 0 && wc <= 0 {
+		wl, wlat, waff, wc = 0.5, 0.15, 0.15, 0.2
 	}
 	filters := []Filter{
 		HealthFilter{Metrics: cfg.Metrics},
 		ModelFilter{},
+		CapabilityFilter{Metrics: cfg.Metrics},
 	}
 	if cfg.AdmissionLimit > 0 {
 		filters = append(filters, AdmissionFilter{Limit: cfg.AdmissionLimit, Metrics: cfg.Metrics})
@@ -65,6 +68,12 @@ func NewConfiguredChain(cfg ChainConfig) *Chain {
 		scorers = append(scorers, WeightedScorer{
 			Scorer: NewAffinityScorer(cfg.AffinityWindow, cfg.AffinityBlock),
 			Weight: waff,
+		})
+	}
+	if wc > 0 {
+		scorers = append(scorers, WeightedScorer{
+			Scorer: NewCostScorer(),
+			Weight: wc,
 		})
 	}
 	return NewChain(filters, scorers)

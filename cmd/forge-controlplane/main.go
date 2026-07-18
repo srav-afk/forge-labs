@@ -91,6 +91,7 @@ func main() {
 			WeightLoad:     k.Float64("scheduler.weight.load"),
 			WeightLatency:  k.Float64("scheduler.weight.latency"),
 			WeightAffinity: k.Float64("scheduler.weight.affinity"),
+			WeightCost:     k.Float64("scheduler.weight.cost"),
 			LatencyRefMs:   k.Float64("scheduler.latency.ref.ms"),
 			AdmissionLimit: k.Int("admission.per.worker.limit"),
 			AffinityWindow: k.Int("affinity.prefix.window"),

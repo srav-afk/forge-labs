@@ -13,15 +13,17 @@ const (
 )
 
 type Heartbeat struct {
-	ID         string  `json:"id"`
-	BaseModel  string  `json:"base_model"`
-	Adapter    *string `json:"adapter"`
-	Runtime    string  `json:"runtime"`
-	Addr       string  `json:"addr"`
-	Ready      bool    `json:"ready"`
-	Inflight   int     `json:"inflight"`
-	QueueDepth int     `json:"queue_depth"`
-	TS         int64   `json:"ts"`
+	ID            string  `json:"id"`
+	BaseModel     string  `json:"base_model"`
+	Adapter       *string `json:"adapter"`
+	Runtime       string  `json:"runtime"`
+	Addr          string  `json:"addr"`
+	Ready         bool    `json:"ready"`
+	Inflight      int     `json:"inflight"`
+	QueueDepth    int     `json:"queue_depth"`
+	KVCacheUsage  float64 `json:"kv_cache_usage,omitempty"`
+	GPUCacheUsage float64 `json:"gpu_cache_usage,omitempty"`
+	TS            int64   `json:"ts"`
 }
 
 func Key(workerID string) string {

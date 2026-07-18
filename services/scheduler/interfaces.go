@@ -10,6 +10,13 @@ type Candidate struct {
 	Ready         bool
 	EwmaLatencyMs float64
 	Models        []string
+	MaxContext    uint32
+	CostPerHour   float64
+	CostClass     string
+	Runtime       string
+	VRAMGB        float64
+	GPU           string
+	Capabilities  map[string]string
 }
 
 type Request struct {
@@ -18,6 +25,7 @@ type Request struct {
 	Prompt          string
 	AffinityKey     string
 	PreferredWorker string
+	MinContext      uint32
 }
 
 type Filter interface {

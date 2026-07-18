@@ -24,6 +24,8 @@ type HeartbeatWriter struct {
 	ready     atomic.Bool
 	inflight  atomic.Int64
 	queue     atomic.Int64
+	kvUsage   atomic.Uint64
+	gpuUsage  atomic.Uint64
 }
 
 type HeartbeatWriterConfig struct {
@@ -68,18 +70,33 @@ func (w *HeartbeatWriter) SetLoad(inflight, queueDepth int64) {
 	w.queue.Store(queueDepth)
 }
 
+func (w *HeartbeatWriter) SetCacheUsage(kv, gpu float64) {
+	w.kvUsage.Store(floatBits(kv))
+	w.gpuUsage.Store(floatBits(gpu))
+}
+
 func (w *HeartbeatWriter) snapshot() health.Heartbeat {
 	return health.Heartbeat{
-		ID:         w.id,
-		BaseModel:  w.baseModel,
-		Adapter:    w.adapter,
-		Runtime:    w.runtime,
-		Addr:       w.addr,
-		Ready:      w.ready.Load(),
-		Inflight:   int(w.inflight.Load()),
-		QueueDepth: int(w.queue.Load()),
-		TS:         time.Now().UnixMilli(),
+		ID:            w.id,
+		BaseModel:     w.baseModel,
+		Adapter:       w.adapter,
+		Runtime:       w.runtime,
+		Addr:          w.addr,
+		Ready:         w.ready.Load(),
+		Inflight:      int(w.inflight.Load()),
+		QueueDepth:    int(w.queue.Load()),
+		KVCacheUsage:  bitsFloat(w.kvUsage.Load()),
+		GPUCacheUsage: bitsFloat(w.gpuUsage.Load()),
+		TS:            time.Now().UnixMilli(),
 	}
+}
+
+func floatBits(f float64) uint64 {
+	return uint64(f * 1_000_000)
+}
+
+func bitsFloat(u uint64) float64 {
+	return float64(u) / 1_000_000
 }
 
 func (w *HeartbeatWriter) BeatOnce(ctx context.Context) error {

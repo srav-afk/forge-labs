@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,26 +25,27 @@ import (
 	"github.com/srav-afk/forge-labs/internal/observability"
 	"github.com/srav-afk/forge-labs/internal/redisx"
 	"github.com/srav-afk/forge-labs/worker"
+	"github.com/srav-afk/forge-labs/worker/adapters"
 	"github.com/srav-afk/forge-labs/worker/adapters/ollama"
+	"github.com/srav-afk/forge-labs/worker/adapters/vllm"
 	workergrpc "github.com/srav-afk/forge-labs/worker/grpc"
 )
 
 func main() {
 	cfg := config.Load(config.WorkerDefaults())
-
-	ollamaAdapter := ollama.New(ollama.Config{
-		BaseURL:   cfg.String("ollama.url"),
-		KeepAlive: cfg.String("ollama.keep.alive"),
-	})
+	adapter, runtimeLabel, err := buildAdapter(cfg)
+	if err != nil {
+		log.Fatalf("adapter: %v", err)
+	}
 
 	readyCtx, readyCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	ready := ollamaAdapter.Ready(readyCtx)
+	ready := adapter.Ready(readyCtx)
 	readyCancel()
 	if os.Getenv("FORGE_WORKER_READY") != "" {
 		ready = cfg.Bool("worker.ready")
 	}
 	if !ready {
-		log.Printf("ollama not ready at %s; heartbeats will advertise ready=false", cfg.String("ollama.url"))
+		log.Printf("%s not ready; heartbeats will advertise ready=false", runtimeLabel)
 	}
 
 	registerWithControlPlane(cfg)
@@ -62,7 +66,7 @@ func main() {
 		ID:        cfg.String("worker.id"),
 		BaseModel: cfg.String("worker.model.base"),
 		Adapter:   adapterName,
-		Runtime:   config.RuntimeLabel(cfg.String("worker.runtime")),
+		Runtime:   runtimeLabel,
 		Addr:      cfg.String("worker.endpoint"),
 		TTL:       config.Duration(cfg, "heartbeat.ttl", 6*time.Second),
 		Interval:  config.Duration(cfg, "heartbeat.interval", 2*time.Second),
@@ -87,7 +91,10 @@ func main() {
 	}()
 
 	go hb.Run(ctx)
-	go refreshReady(ctx, ollamaAdapter, hb)
+	go refreshReady(ctx, adapter, hb)
+	if va, ok := adapter.(*vllm.Adapter); ok {
+		go scrapeVLLMLoad(ctx, va, hb)
+	}
 
 	reg := observability.NewRegistry()
 	up := prometheus.NewGauge(prometheus.GaugeOpts{
@@ -98,10 +105,10 @@ func main() {
 	up.Set(1)
 
 	go serveMetrics(cfg.String("metrics.addr"), reg)
-	go serveWorkerGRPC(cfg.String("worker.grpc.addr"), ollamaAdapter, cfg.String("ollama.keep.alive"))
+	go serveWorkerGRPC(cfg.String("worker.grpc.addr"), adapter, cfg.String("ollama.keep.alive"), runtimeLabel)
 
-	log.Printf("worker %s gRPC on %s (ollama=%s ready=%v)",
-		cfg.String("worker.id"), cfg.String("worker.grpc.addr"), cfg.String("ollama.url"), ready)
+	log.Printf("worker %s gRPC on %s (runtime=%s ready=%v)",
+		cfg.String("worker.id"), cfg.String("worker.grpc.addr"), runtimeLabel, ready)
 	<-ctx.Done()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -112,7 +119,30 @@ func main() {
 	log.Printf("worker shut down")
 }
 
-func refreshReady(ctx context.Context, a *ollama.Adapter, hb *worker.HeartbeatWriter) {
+func buildAdapter(cfg *koanf.Koanf) (adapters.RuntimeAdapter, string, error) {
+	kind := strings.ToUpper(cfg.String("worker.runtime"))
+	switch {
+	case strings.Contains(kind, "VLLM"):
+		served := cfg.String("vllm.served.model")
+		if served == "" {
+			served = cfg.String("worker.model.base")
+		}
+		return vllm.New(vllm.Config{
+			BaseURL:     cfg.String("vllm.url"),
+			ServedModel: served,
+			ForgeModel:  cfg.String("worker.model.base"),
+		}), "vllm", nil
+	case strings.Contains(kind, "OLLAMA"), kind == "", strings.Contains(kind, "UNSPECIFIED"):
+		return ollama.New(ollama.Config{
+			BaseURL:   cfg.String("ollama.url"),
+			KeepAlive: cfg.String("ollama.keep.alive"),
+		}), "ollama", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported worker.runtime %q (use RUNTIME_KIND_OLLAMA or RUNTIME_KIND_VLLM)", cfg.String("worker.runtime"))
+	}
+}
+
+func refreshReady(ctx context.Context, a adapters.RuntimeAdapter, hb *worker.HeartbeatWriter) {
 	if os.Getenv("FORGE_WORKER_READY") != "" {
 		return
 	}
@@ -130,6 +160,26 @@ func refreshReady(ctx context.Context, a *ollama.Adapter, hb *worker.HeartbeatWr
 	}
 }
 
+func scrapeVLLMLoad(ctx context.Context, a *vllm.Adapter, hb *worker.HeartbeatWriter) {
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+			snap, err := a.ScrapeMetrics(probe)
+			cancel()
+			if err != nil {
+				continue
+			}
+			hb.SetLoad(int64(snap.Running), int64(snap.Waiting))
+			hb.SetCacheUsage(snap.KVCacheUsage, snap.GPUCacheUsage)
+		}
+	}
+}
+
 func serveMetrics(addr string, reg *observability.Registry) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", reg.Handler())
@@ -138,7 +188,7 @@ func serveMetrics(addr string, reg *observability.Registry) {
 	}
 }
 
-func serveWorkerGRPC(addr string, a *ollama.Adapter, keepAlive string) {
+func serveWorkerGRPC(addr string, a adapters.RuntimeAdapter, keepAlive, runtime string) {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("worker grpc listen: %v", err)
@@ -146,7 +196,7 @@ func serveWorkerGRPC(addr string, a *ollama.Adapter, keepAlive string) {
 	s := grpc.NewServer(observability.GRPCServerOption())
 	workerv1.RegisterWorkerServiceServer(s, workergrpc.NewServer(a, keepAlive))
 	reflection.Register(s)
-	log.Printf("worker gRPC listening on %s", addr)
+	log.Printf("worker gRPC listening on %s runtime=%s", addr, runtime)
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("worker grpc serve: %v", err)
 	}
@@ -160,6 +210,31 @@ func registerWithControlPlane(cfg *koanf.Koanf) {
 	defer conn.Close()
 
 	client := registryv1.NewRegistryServiceClient(conn)
+	caps := cfg.StringMap("worker.capabilities")
+	if caps == nil {
+		caps = map[string]string{}
+	}
+	if _, ok := caps["cost_per_hour"]; !ok {
+		caps["cost_per_hour"] = strconv.FormatFloat(cfg.Float64("worker.cost.per.hour"), 'f', -1, 64)
+	}
+	if _, ok := caps["cost_class"]; !ok {
+		class := cfg.String("worker.cost.class")
+		if class == "" {
+			if cfg.Float64("worker.cost.per.hour") > 0 {
+				class = "paid"
+			} else {
+				class = "free"
+			}
+		}
+		caps["cost_class"] = class
+	}
+	if _, ok := caps["runtime"]; !ok {
+		caps["runtime"] = config.RuntimeLabel(cfg.String("worker.runtime"))
+	}
+	if _, ok := caps["max_model_len"]; !ok {
+		caps["max_model_len"] = strconv.Itoa(cfg.Int("worker.model.context"))
+	}
+
 	req := &registryv1.RegisterRequest{
 		WorkerId:    cfg.String("worker.id"),
 		Endpoint:    cfg.String("worker.endpoint"),
@@ -170,7 +245,7 @@ func registerWithControlPlane(cfg *koanf.Koanf) {
 				MaxContext: uint32(cfg.Int("worker.model.context")),
 			},
 		},
-		Capabilities: cfg.StringMap("worker.capabilities"),
+		Capabilities: caps,
 	}
 
 	var lastErr error
@@ -179,7 +254,8 @@ func registerWithControlPlane(cfg *koanf.Koanf) {
 		resp, err := client.Register(ctx, req)
 		cancel()
 		if err == nil {
-			log.Printf("registered worker %s at %s", resp.GetWorkerId(), resp.GetRegisteredAt().AsTime())
+			log.Printf("registered worker %s at %s cost=%s/hr class=%s",
+				resp.GetWorkerId(), resp.GetRegisteredAt().AsTime(), caps["cost_per_hour"], caps["cost_class"])
 			return
 		}
 		lastErr = err

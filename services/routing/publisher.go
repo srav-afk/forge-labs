@@ -110,28 +110,47 @@ func (p *Publisher) buildSnapshot(ctx context.Context) (*RoutingSnapshot, error)
 		if live && hb.Addr != "" {
 			endpoint = hb.Addr
 		}
+		caps := ParseCapabilities([]byte(w.Capabilities), w.RuntimeKind)
 
 		if len(w.Models) == 0 {
 			views = append(views, WorkerView{
-				ID:         w.ID,
-				Endpoint:   endpoint,
-				Healthy:    live,
-				Ready:      ready,
-				QueueDepth: queue,
-				InFlight:   inflight,
+				ID:           w.ID,
+				Endpoint:     endpoint,
+				Healthy:      live,
+				Ready:        ready,
+				QueueDepth:   queue,
+				InFlight:     inflight,
+				MaxContext:   caps.MaxContext,
+				CostPerHour:  caps.Cost.PerHourUSD,
+				CostClass:    caps.Cost.Class,
+				Runtime:      caps.Runtime,
+				VRAMGB:       caps.VRAMGB,
+				GPU:          caps.GPU,
+				Capabilities: caps.Raw,
 			})
 			continue
 		}
 		for _, m := range w.Models {
+			maxCtx := m.MaxContext
+			if maxCtx == 0 {
+				maxCtx = caps.MaxContext
+			}
 			views = append(views, WorkerView{
-				ID:         w.ID,
-				Endpoint:   endpoint,
-				BaseModel:  m.BaseModel,
-				Adapter:    m.Adapter,
-				Healthy:    live,
-				Ready:      ready,
-				QueueDepth: queue,
-				InFlight:   inflight,
+				ID:           w.ID,
+				Endpoint:     endpoint,
+				BaseModel:    m.BaseModel,
+				Adapter:      m.Adapter,
+				Healthy:      live,
+				Ready:        ready,
+				QueueDepth:   queue,
+				InFlight:     inflight,
+				MaxContext:   maxCtx,
+				CostPerHour:  caps.Cost.PerHourUSD,
+				CostClass:    caps.Cost.Class,
+				Runtime:      caps.Runtime,
+				VRAMGB:       caps.VRAMGB,
+				GPU:          caps.GPU,
+				Capabilities: caps.Raw,
 			})
 		}
 	}

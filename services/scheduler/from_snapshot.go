@@ -35,6 +35,13 @@ func CandidatesFromSnapshot(snap *routing.RoutingSnapshot, load LoadSource, late
 				Ready:         w.Ready,
 				EwmaLatencyMs: ewma,
 				Models:        nil,
+				MaxContext:    w.MaxContext,
+				CostPerHour:   w.CostPerHour,
+				CostClass:     w.CostClass,
+				Runtime:       w.Runtime,
+				VRAMGB:        w.VRAMGB,
+				GPU:           w.GPU,
+				Capabilities:  w.Capabilities,
 			}
 			byID[w.ID] = c
 			order = append(order, w.ID)
@@ -50,6 +57,27 @@ func CandidatesFromSnapshot(snap *routing.RoutingSnapshot, load LoadSource, late
 			}
 			if depth > c.QueueDepth {
 				c.QueueDepth = depth
+			}
+			if w.MaxContext > c.MaxContext {
+				c.MaxContext = w.MaxContext
+			}
+			if w.CostPerHour > 0 {
+				c.CostPerHour = w.CostPerHour
+			}
+			if w.CostClass != "" {
+				c.CostClass = w.CostClass
+			}
+			if w.Runtime != "" {
+				c.Runtime = w.Runtime
+			}
+			if w.VRAMGB > c.VRAMGB {
+				c.VRAMGB = w.VRAMGB
+			}
+			if w.GPU != "" {
+				c.GPU = w.GPU
+			}
+			if len(w.Capabilities) > 0 {
+				c.Capabilities = w.Capabilities
 			}
 		}
 		if w.BaseModel == "" {
