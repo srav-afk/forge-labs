@@ -28,6 +28,21 @@ func ControlPlaneDefaults() map[string]any {
 		"otlp.endpoint":                     "localhost:4317",
 		"trace.sample.ratio":                1.0,
 		"fleet.runpod.enabled":              false,
+		"fleet.runpod.dry.run":              true,
+		"fleet.runpod.gpu.type":             "NVIDIA GeForce RTX 4090",
+		"fleet.runpod.image":                "vllm/vllm-openai:latest",
+		"fleet.runpod.cloud.type":           "COMMUNITY",
+		"fleet.runpod.container.disk.gb":    50,
+		"fleet.runpod.volume.disk.gb":       20,
+		"fleet.runpod.vllm.model":           "",
+		"fleet.runpod.vllm.port":            8000,
+		"fleet.runpod.controlplane.grpc":    "",
+		"fleet.local.worker.binary":         "bin/forge-worker",
+		"fleet.local.base.grpc.port":        50100,
+		"fleet.local.ollama.url":            "http://127.0.0.1:11434",
+		"gateway.api.key":                   "",
+		"runpod.api.key":                    "",
+		"hf.token":                          "",
 	}
 }
 

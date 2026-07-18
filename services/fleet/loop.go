@@ -153,18 +153,25 @@ func (m *Manager) reconcile(ctx context.Context, id ModelIdentity) error {
 }
 
 func (m *Manager) scaleUp(ctx context.Context, id ModelIdentity) error {
+	m.mu.Lock()
+	placeholder := WorkerID("provisioning-" + id.Key())
+	m.workers[placeholder] = &trackedWorker{ID: placeholder, Model: id, State: StateProvisioning}
+	m.mu.Unlock()
+
 	wid, err := m.provisioner.Provision(ctx, id)
+	m.mu.Lock()
+	delete(m.workers, placeholder)
 	if err != nil {
+		m.mu.Unlock()
 		return err
 	}
-	m.mu.Lock()
 	m.workers[wid] = &trackedWorker{ID: wid, Model: id, State: StateReady}
 	m.mu.Unlock()
 	if m.metrics != nil {
 		m.metrics.IncScale(id.Key(), "up")
 	}
 	m.hyst.ClearPending(id.Key())
-	log.Printf("fleet: scale up %s -> %s", id.Key(), wid)
+	log.Printf("fleet: scale up %s -> %s via %s", id.Key(), wid, m.provisioner.Kind())
 	return nil
 }
 
@@ -223,27 +230,22 @@ func (m *Manager) drainOne(ctx context.Context, id ModelIdentity) error {
 }
 
 func (m *Manager) readyCount(id ModelIdentity) int {
-	n := 0
+	seen := map[string]struct{}{}
 	if snap := m.holder.Load(); snap != nil {
-		seen := map[string]struct{}{}
 		for _, w := range snap.Workers {
 			if w.BaseModel == id.BaseModel && w.Adapter == id.Adapter && w.Healthy && w.Ready {
-				if _, ok := seen[w.ID]; ok {
-					continue
-				}
 				seen[w.ID] = struct{}{}
-				n++
 			}
 		}
 	}
 	m.mu.Lock()
 	for _, w := range m.workers {
-		if w.Model.Key() == id.Key() && w.State == StateReady {
-			n++
+		if w.Model.Key() == id.Key() && (w.State == StateReady || w.State == StateProvisioning) {
+			seen[string(w.ID)] = struct{}{}
 		}
 	}
 	m.mu.Unlock()
-	return n
+	return len(seen)
 }
 
 func (m *Manager) sumActive(id ModelIdentity) int {

@@ -183,9 +183,31 @@ func main() {
 	must(c.Provide(fleet.NewPolicyCache))
 	must(c.Provide(func(k *koanf.Koanf) fleet.Provisioner {
 		if k.Bool("fleet.runpod.enabled") {
-			return fleet.NewRunPodProvisioner(true)
+			return fleet.NewRunPodProvisioner(fleet.RunPodProvisionerConfig{
+				Enabled:       true,
+				DryRun:        k.Bool("fleet.runpod.dry.run"),
+				APIKey:        firstNonEmpty(k.String("runpod.api.key"), os.Getenv("FORGE_RUNPOD_API_KEY"), os.Getenv("RUNPOD_API_KEY")),
+				GPUTypeID:     k.String("fleet.runpod.gpu.type"),
+				Image:         k.String("fleet.runpod.image"),
+				CloudType:     k.String("fleet.runpod.cloud.type"),
+				ContainerDisk: k.Int("fleet.runpod.container.disk.gb"),
+				VolumeDisk:    k.Int("fleet.runpod.volume.disk.gb"),
+				HFToken:       firstNonEmpty(k.String("hf.token"), os.Getenv("FORGE_HF_TOKEN"), os.Getenv("HF_TOKEN")),
+				VLLMModel:     k.String("fleet.runpod.vllm.model"),
+				VLLMPort:      k.Int("fleet.runpod.vllm.port"),
+				ControlPlane:  k.String("fleet.runpod.controlplane.grpc"),
+				RedisURL:      k.String("redis.url"),
+			})
 		}
-		return fleet.NewLocalProcess()
+		return fleet.NewLocalProcessWithConfig(fleet.LocalProcessConfig{
+			Binary:       k.String("fleet.local.worker.binary"),
+			EnvFile:      os.Getenv("FORGE_ENV_FILE"),
+			BaseGRPCPort: k.Int("fleet.local.base.grpc.port"),
+			ControlPlane: firstNonEmpty(k.String("grpc.public.addr"), "127.0.0.1:8081"),
+			RedisURL:     k.String("redis.url"),
+			DBURL:        k.String("db.url"),
+			OllamaURL:    k.String("fleet.local.ollama.url"),
+		})
 	}))
 	must(c.Provide(func(reg *observability.Registry) *fleet.Metrics {
 		return fleet.NewMetrics(reg)
@@ -272,7 +294,7 @@ func run(
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- serveHTTP(k.String("http.addr"), gw)
+		errCh <- serveHTTP(k.String("http.addr"), gw, cacheSvc, k.String("gateway.api.key"))
 	}()
 
 	select {
@@ -306,7 +328,7 @@ func serveGRPC(addr string, svc registry.RegistryService) {
 	}
 }
 
-func serveHTTP(addr string, gw *gateway.Handler) error {
+func serveHTTP(addr string, gw *gateway.Handler, cache *cacheregistry.Service, apiKey string) error {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -314,9 +336,59 @@ func serveHTTP(addr string, gw *gateway.Handler) error {
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+	if cache != nil {
+		r.POST("/internal/cache/events", func(c *gin.Context) {
+			var ev cacheregistry.Event
+			if err := c.ShouldBindJSON(&ev); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			if ev.Type == "" {
+				ev.Type = "stored"
+			}
+			if ev.Type == "stored" {
+				cache.Report(c.Request.Context(), ev.WorkerID, ev.BaseModel, ev.Adapter, ev.Tier, ev.Hashes)
+			} else {
+				cache.Apply(ev)
+			}
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+		})
+	}
+	if apiKey != "" {
+		r.Use(func(c *gin.Context) {
+			if c.Request.URL.Path == "/healthz" || c.Request.URL.Path == "/internal/cache/events" {
+				c.Next()
+				return
+			}
+			auth := c.GetHeader("Authorization")
+			got := ""
+			if len(auth) > 7 && (auth[:7] == "Bearer " || auth[:7] == "bearer ") {
+				got = auth[7:]
+			}
+			if got == "" {
+				got = c.GetHeader("X-API-Key")
+			}
+			if got != apiKey {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+					"error": gin.H{"message": "invalid api key", "type": "auth_error", "code": "unauthorized"},
+				})
+				return
+			}
+			c.Next()
+		})
+	}
 	gw.Register(r)
 	log.Printf("gateway http listening on %s", addr)
 	return r.Run(addr)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func must(err error) {

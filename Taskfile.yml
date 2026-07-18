@@ -13,16 +13,39 @@ tasks:
       - buf lint
 
   build:
-    desc: Build both binaries
+    desc: Build control plane, worker, catalog
     deps: [gen]
     cmds:
-      - go build ./...
+      - mkdir -p bin
+      - go build -o bin/forge-controlplane ./cmd/forge-controlplane
+      - go build -o bin/forge-worker ./cmd/forge-worker
+      - go build -o bin/forge-catalog ./cmd/forge-catalog
+
+  test:
+    desc: Run all Go tests
+    cmds:
+      - go test ./...
+
+  lab:up:
+    desc: Start tier-a compose + control plane + free worker
+    cmds:
+      - ./scripts/lab-up.sh
+
+  lab:down:
+    desc: Stop lab processes and tier-a compose
+    cmds:
+      - ./scripts/lab-down.sh
 
   worker:run:
     desc: Run forge-worker against local config
     deps: [gen]
     cmds:
       - go run ./cmd/forge-worker
+
+  catalog:
+    desc: 'Catalog CLI (usage: task catalog -- models)'
+    cmds:
+      - go run ./cmd/forge-catalog {{.CLI_ARGS}}
 
   migrate-diff:
     desc: 'Generate a migration from the GORM models (usage: task migrate-diff -- <name>)'

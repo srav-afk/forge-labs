@@ -46,7 +46,7 @@ func TestScaleUpOnLoad(t *testing.T) {
 		BaseModel: "qwen3.6:27b", MinReplicas: 1, MaxReplicas: 3, TargetConcurrency: 16,
 		ScaleUpUtilization: 0.7, ScaleDownDelaySeconds: 0, StabilizationWindowSeconds: 1,
 	})
-	prov := NewLocalProcess()
+	prov := NewLocalProcessWithConfig(LocalProcessConfig{TrackOnly: true})
 	metrics := NewMetrics(nil)
 	mgr := NewManager(pol, prov, holder, nil, metrics)
 	if err := mgr.reconcile(context.Background(), ModelIdentity{BaseModel: "qwen3.6:27b"}); err != nil {

@@ -1,100 +1,59 @@
-# RunPod vLLM worker (manual, cp-13)
+# RunPod + Forge (fleet provisioner)
 
-cp-13 does **not** provision pods. Rent a GPU, start vLLM + Tailscale + `forge-worker`, and it registers like any other worker. Automated create/drain is cp-15.
+## Modes
+
+### A. Automated (cp-15 path)
+
+Control plane can create/delete GPU pods via RunPod REST when:
+
+```bash
+export FORGE_FLEET_RUNPOD_ENABLED=true
+export FORGE_FLEET_RUNPOD_DRY_RUN=false   # default is true (safe)
+export FORGE_RUNPOD_API_KEY=...
+export FORGE_HF_TOKEN=...
+export FORGE_FLEET_RUNPOD_GPU_TYPE="NVIDIA GeForce RTX 4090"
+export FORGE_FLEET_RUNPOD_IMAGE=vllm/vllm-openai:latest
+export FORGE_FLEET_RUNPOD_VLLM_MODEL=Qwen/Qwen2.5-0.5B-Instruct
+export FORGE_FLEET_RUNPOD_CLOUD_TYPE=COMMUNITY
+```
+
+Fleet scale-up calls `POST https://rest.runpod.io/v1/pods` and starts vLLM OpenAI server on port 8000.
+Proxy URL: `https://<pod-id>-8000.proxy.runpod.net`
+
+**Important:** gRPC `forge-worker` on the pod still needs network reachability (Tailscale). The HTTP OpenAI port is usable as a **provider** base URL without Tailscale:
+
+```bash
+FORGE_ENV_FILE=development.tier-a.env go run ./cmd/forge-catalog provider-upsert \
+  runpod-vllm "https://PODID-8000.proxy.runpod.net/v1" FORGE_RUNPOD_API_KEY \
+  Qwen/Qwen2.5-0.5B-Instruct=Qwen/Qwen2.5-0.5B-Instruct
+```
+
+(If the proxy needs no API key, set a dummy `api_key_ref` or empty-key provider path.)
+
+Default **dry-run** avoids accidental spend. Account balance must cover community GPU time.
+
+### B. Manual worker (full gRPC path)
+
+1. Create pod (template or image) with GPU.
+2. Install Tailscale; set worker endpoint to `100.x:50051`.
+3. Run vLLM + `forge-worker` with `RUNTIME_KIND_VLLM`.
+
+See historical model notes below.
 
 ## Model choices (as of 2026-07-18)
 
-Pulled from Hugging Face model cards + Ollama library (newest tags), not plan-doc nostalgia:
+| Role | Id |
+|------|----|
+| Cheap GPU test | `Qwen/Qwen2.5-0.5B-Instruct` |
+| Local free | `qwen3.5:0.8b` / `qwen3.6:27b` |
+| Big SaaS | Baseten `nvidia/Nemotron-120B-A12B` |
 
-| Role | Id | Why (sources) |
-|------|----|----------------|
-| Free Mac (Ollama) | `qwen3.6:27b` | Latest open Qwen dense that people self-host; Ollama `qwen3.6` (27b/35b). HF: [`Qwen/Qwen3.6-27B`](https://huggingface.co/Qwen/Qwen3.6-27B) |
-| Alt local | `gemma4:12b` | Gemma 4 family; Ollama updated ~2 weeks ago |
-| Paid GPU (vLLM) | `zai-org/GLM-5.2` | Current open-weight coding/agent flagship (~753B MoE, MIT, 1M ctx). HF: [`zai-org/GLM-5.2`](https://huggingface.co/zai-org/GLM-5.2); vLLM ≥0.23 |
-| Alt large | `moonshotai/Kimi-K2.7-Code` or `deepseek-ai/DeepSeek-V4-Flash` | June 2026 agent/coding contenders |
-
-Qwen3.7-Max is API-only as of mid-2026 — no open weights. Llama 4 is deprioritized in community self-host roundups; not used as the default here.
-
-Forge routes on the **string** you register as `worker.model.base`.
-
-## 1. Pod
-
-- GPU: multi-H100/H200 class for `GLM-5.2` (not a single 24GB card)
-- Template: PyTorch or bare Ubuntu
-- Expose **no public ports** — only Tailscale
-
-## 2. Tailscale (ephemeral)
+## Teardown
 
 ```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up --authkey=tskey-auth-XXXX --hostname=forge-runpod-a --advertise-tags=tag:forge
-tailscale ip -4
+runpodctl pod list --all
+runpodctl pod delete <id>
+# or fleet scale-down / provisioner Retire
 ```
 
-## 3. vLLM
-
-```bash
-export MODEL=zai-org/GLM-5.2
-# vllm>=0.23.0 per model card
-vllm serve "$MODEL" \
-  --host 127.0.0.1 \
-  --port 8000 \
-  --max-model-len 1048576
-```
-
-Metrics: `http://127.0.0.1:8000/metrics`.
-
-## 4. forge-worker on the pod
-
-```bash
-export FORGE_WORKER_ID=pod-a
-export FORGE_WORKER_ENDPOINT=100.81.4.12:50051
-export FORGE_WORKER_GRPC_ADDR=:50051
-export FORGE_WORKER_RUNTIME=RUNTIME_KIND_VLLM
-export FORGE_WORKER_MODEL_BASE=zai-org/GLM-5.2
-export FORGE_WORKER_MODEL_CONTEXT=1048576
-export FORGE_VLLM_URL=http://127.0.0.1:8000
-export FORGE_VLLM_SERVED_MODEL=zai-org/GLM-5.2
-export FORGE_WORKER_COST_PER_HOUR=1.19
-export FORGE_WORKER_COST_CLASS=paid
-export FORGE_CONTROLPLANE_GRPC=100.x.y.z:8081
-export FORGE_REDIS_URL=redis://100.x.y.z:6379/0
-
-export FORGE_WORKER_CAPABILITIES_RUNTIME=vllm
-export FORGE_WORKER_CAPABILITIES_GPU=H100
-export FORGE_WORKER_CAPABILITIES_VRAM_GB=80
-export FORGE_WORKER_CAPABILITIES_COST_PER_HOUR=1.19
-export FORGE_WORKER_CAPABILITIES_COST_CLASS=paid
-export FORGE_WORKER_CAPABILITIES_MAX_MODEL_LEN=1048576
-
-./forge-worker
-```
-
-Short catalog name: set `FORGE_WORKER_MODEL_BASE=glm-5.2` and keep `FORGE_VLLM_SERVED_MODEL=zai-org/GLM-5.2`.
-
-## 5. Local Mac worker (free)
-
-```bash
-ollama pull qwen3.6:27b
-export FORGE_WORKER_ID=mac-1
-export FORGE_WORKER_RUNTIME=RUNTIME_KIND_OLLAMA
-export FORGE_WORKER_MODEL_BASE=qwen3.6:27b
-export FORGE_WORKER_MODEL_CONTEXT=262144
-export FORGE_WORKER_COST_PER_HOUR=0
-export FORGE_WORKER_COST_CLASS=free
-./forge-worker
-```
-
-## 6. Routing check
-
-```bash
-curl -s localhost:8080/v1/chat/completions -H 'content-type: application/json' \
-  -d '{"model":"qwen3.6:27b","messages":[{"role":"user","content":"hi"}]}'
-
-curl -s localhost:8080/v1/chat/completions -H 'content-type: application/json' \
-  -d '{"model":"zai-org/GLM-5.2","messages":[{"role":"user","content":"hi"}]}'
-```
-
-## 7. Teardown
-
-Stop the pod. Within heartbeat TTL (~6s) + reconcile it drops from the snapshot.
+Never leave GPUs idle with dry-run=false.
