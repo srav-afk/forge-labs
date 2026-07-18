@@ -54,6 +54,25 @@ Defaults:
 
 Secrets (API keys): `development.secrets.env` (gitignored). Sourced automatically by `lab-up.sh` when present.
 
+## Observability (default on)
+
+`lab-up.sh` also starts `docker-compose.lab-obs.yml` unless `FORGE_LAB_OBS=0`:
+
+| UI | URL |
+|----|-----|
+| Prometheus | http://127.0.0.1:9092 |
+| Grafana | http://127.0.0.1:3001 (anonymous admin; **Forge gateway** dashboard) |
+| Jaeger | http://127.0.0.1:16686 |
+
+`development.tier-a.env` defaults:
+
+```bash
+FORGE_OTLP_ENDPOINT=localhost:4317
+FORGE_TRACE_SAMPLE_RATIO=1.0
+```
+
+Generate traffic, then open Grafana (QPS, p95, TTFT, rejects, dispatch by worker) and Jaeger (service `forge-controlplane`).
+
 ## Prerequisites
 
 - Docker

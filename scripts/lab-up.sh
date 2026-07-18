@@ -35,6 +35,12 @@ DB_URL="${FORGE_DB_URL:-$DB_URL}"
 echo "==> compose up ($PROJECT)"
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" up -d
 
+OBS_FILE="${FORGE_OBS_COMPOSE:-docker-compose.lab-obs.yml}"
+if [[ -f "$OBS_FILE" && "${FORGE_LAB_OBS:-1}" != "0" ]]; then
+  echo "==> observability stack (prometheus :9092, grafana :3001, jaeger :16686)"
+  docker compose -p "${PROJECT}-obs" -f "$OBS_FILE" up -d || echo "warn: obs stack failed (ports busy?)"
+fi
+
 echo "==> wait postgres"
 ok=0
 for _ in $(seq 1 40); do
@@ -152,6 +158,10 @@ echo "    models:   curl -s $GATEWAY/v1/models"
 echo "    chat:     curl -s $GATEWAY/v1/chat/completions -H 'content-type: application/json' \\"
 echo "              -d '{\"model\":\"qwen3.5:0.8b\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":16}'"
 echo "    metrics:  curl -s http://127.0.0.1:9090/metrics | grep forge_"
+echo "    prometheus: http://127.0.0.1:9092"
+echo "    grafana:    http://127.0.0.1:3001  (Forge gateway dashboard)"
+echo "    jaeger:     http://127.0.0.1:16686"
 echo "    logs:     $LOG_DIR/forge-controlplane.log $LOG_DIR/forge-worker-free.log"
 echo "    down:     ./scripts/lab-down.sh"
 echo "    docs:     docs/lab.md"
+echo "    skip obs: FORGE_LAB_OBS=0 ./scripts/lab-up.sh"

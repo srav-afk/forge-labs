@@ -40,4 +40,10 @@ if [[ -f "$COMPOSE_FILE" ]]; then
   docker compose -p "$PROJECT" -f "$COMPOSE_FILE" down || true
 fi
 
+OBS_FILE="${FORGE_OBS_COMPOSE:-docker-compose.lab-obs.yml}"
+if [[ -f "$OBS_FILE" ]]; then
+  echo "==> obs compose down"
+  docker compose -p "${PROJECT}-obs" -f "$OBS_FILE" down || true
+fi
+
 echo "==> lab down"
