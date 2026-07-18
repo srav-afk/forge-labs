@@ -55,6 +55,7 @@ type generateBody struct {
 	Prompt    string         `json:"prompt"`
 	Stream    bool           `json:"stream"`
 	KeepAlive string         `json:"keep_alive,omitempty"`
+	Think     *bool          `json:"think,omitempty"`
 	Options   map[string]any `json:"options,omitempty"`
 }
 
@@ -92,11 +93,19 @@ func (a *Adapter) Generate(ctx context.Context, req adapters.GenerateRequest, si
 		keepAlive = a.keepAlive
 	}
 
+	think := false
+	if req.Options != nil {
+		if v, ok := req.Options["think"].(bool); ok {
+			think = v
+			delete(req.Options, "think")
+		}
+	}
 	body := generateBody{
 		Model:     req.Model,
 		Prompt:    req.Prompt,
 		Stream:    true,
 		KeepAlive: keepAlive,
+		Think:     &think,
 		Options:   req.Options,
 	}
 
