@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	workerv1 "github.com/srav-afk/forge-labs/gen/worker/v1"
+	"github.com/srav-afk/forge-labs/internal/observability"
 	"github.com/srav-afk/forge-labs/services/gateway/reliability"
 	"github.com/srav-afk/forge-labs/services/routing"
 	"github.com/srav-afk/forge-labs/services/scheduler"
@@ -104,7 +105,10 @@ func (h *Handler) Register(r *gin.Engine) {
 }
 
 func dialWorker(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error) {
-	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(endpoint,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		observability.GRPCClientDialOption(),
+	)
 	if err != nil {
 		return nil, nil, err
 	}

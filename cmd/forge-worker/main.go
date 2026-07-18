@@ -72,6 +72,20 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	tr, err := observability.NewTracer(observability.TraceConfig{
+		ServiceName:  "forge-worker",
+		OTLPEndpoint: cfg.String("otlp.endpoint"),
+		SampleRatio:  cfg.Float64("trace.sample.ratio"),
+	})
+	if err != nil {
+		log.Fatalf("tracer: %v", err)
+	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = tr.Shutdown(sctx)
+	}()
+
 	go hb.Run(ctx)
 	go refreshReady(ctx, ollamaAdapter, hb)
 
@@ -129,7 +143,7 @@ func serveWorkerGRPC(addr string, a *ollama.Adapter, keepAlive string) {
 	if err != nil {
 		log.Fatalf("worker grpc listen: %v", err)
 	}
-	s := grpc.NewServer()
+	s := grpc.NewServer(observability.GRPCServerOption())
 	workerv1.RegisterWorkerServiceServer(s, workergrpc.NewServer(a, keepAlive))
 	reflection.Register(s)
 	log.Printf("worker gRPC listening on %s", addr)

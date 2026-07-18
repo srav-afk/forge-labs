@@ -4,6 +4,11 @@ import (
 	"context"
 	"errors"
 	"sort"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var ErrNoCapacity = errors.New("no capacity")
@@ -100,17 +105,45 @@ func (ch *Chain) PickWithMetrics(ctx context.Context, req *Request, candidates [
 }
 
 func (ch *Chain) Rank(ctx context.Context, req *Request, candidates []Candidate) ([]PickResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tr := otel.Tracer("forge-controlplane")
+	ctx, root := tr.Start(ctx, "scheduler.rank")
+	defer root.End()
+	if req != nil {
+		root.SetAttributes(
+			attribute.String("base_model", req.BaseModel),
+			attribute.String("adapter", req.Adapter),
+			attribute.Int("candidates_in", len(candidates)),
+		)
+	}
+
 	surviving := candidates
+	ctx, filterSpan := tr.Start(ctx, "scheduler.filter")
 	for _, f := range ch.Filters {
+		before := len(surviving)
 		surviving = f.Filter(ctx, req, surviving)
+		filterSpan.AddEvent("filter", trace.WithAttributes(
+			attribute.String("name", f.Name()),
+			attribute.Int("before", before),
+			attribute.Int("after", len(surviving)),
+		))
 		if len(surviving) == 0 {
+			filterSpan.SetStatus(codes.Error, f.Name())
+			filterSpan.End()
 			if f.Name() == "admission" {
+				root.SetStatus(codes.Error, "admission rejected")
 				return nil, ErrAdmissionRejected
 			}
+			root.SetStatus(codes.Error, "no capacity")
 			return nil, ErrNoCapacity
 		}
 	}
+	filterSpan.SetAttributes(attribute.Int("candidates_out", len(surviving)))
+	filterSpan.End()
 
+	ctx, scoreSpan := tr.Start(ctx, "scheduler.score")
 	for _, ws := range ch.Scorers {
 		if p, ok := ws.Scorer.(preparer); ok {
 			p.Prepare(ctx, req, surviving)
@@ -149,5 +182,17 @@ func (ch *Chain) Rank(ctx context.Context, req *Request, candidates []Candidate)
 			Score:    r.total,
 		})
 	}
+	if len(out) > 0 {
+		attrs := []attribute.KeyValue{
+			attribute.String("chosen_worker", out[0].WorkerID),
+			attribute.Float64("score", out[0].Score),
+		}
+		if req != nil && req.PreferredWorker != "" {
+			attrs = append(attrs, attribute.String("preferred_worker", req.PreferredWorker))
+		}
+		scoreSpan.SetAttributes(attrs...)
+		root.SetAttributes(attribute.String("chosen_worker", out[0].WorkerID))
+	}
+	scoreSpan.End()
 	return out, nil
 }

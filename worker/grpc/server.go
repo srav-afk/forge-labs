@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -22,13 +25,25 @@ func NewServer(adapter adapters.RuntimeAdapter, keepAlive string) *Server {
 }
 
 func (s *Server) Generate(req *workerv1.GenerateRequest, stream workerv1.WorkerService_GenerateServer) error {
+	tr := otel.Tracer("forge-worker")
+	ctx, span := tr.Start(stream.Context(), "worker.Generate")
+	defer span.End()
+
 	if req.GetPrompt() == "" {
+		span.SetStatus(otelcodes.Error, "prompt required")
 		return status.Error(codes.InvalidArgument, "prompt is required")
 	}
 	model := req.GetModel().GetBaseModel()
 	if model == "" {
+		span.SetStatus(otelcodes.Error, "model required")
 		return status.Error(codes.InvalidArgument, "model.base_model is required")
 	}
+	adapter := req.GetModel().GetAdapter()
+	span.SetAttributes(
+		attribute.String("base_model", model),
+		attribute.String("adapter", adapter),
+		attribute.Int("prompt_chars", len(req.GetPrompt())),
+	)
 
 	options := map[string]any{}
 	if sp := req.GetSampling(); sp != nil {
@@ -53,7 +68,11 @@ func (s *Server) Generate(req *workerv1.GenerateRequest, stream workerv1.WorkerS
 		KeepAlive: s.keepAlive,
 	}
 
-	err := s.adapter.Generate(stream.Context(), genReq, func(chunk adapters.TokenChunk) error {
+	ctx, runtimeSpan := tr.Start(ctx, "runtime.call")
+	runtimeSpan.SetAttributes(attribute.String("runtime", "ollama"))
+	chunks := 0
+	err := s.adapter.Generate(ctx, genReq, func(chunk adapters.TokenChunk) error {
+		chunks++
 		msg := &workerv1.TokenChunk{
 			Text: chunk.Text,
 			Done: chunk.Done,
@@ -65,9 +84,24 @@ func (s *Server) Generate(req *workerv1.GenerateRequest, stream workerv1.WorkerS
 				CompletionTokens: chunk.EvalTokens,
 				TotalDurationNs:  chunk.TotalDurNs,
 			}
+			runtimeSpan.SetAttributes(
+				attribute.Int("prompt_tokens", int(chunk.PromptTokens)),
+				attribute.Int("completion_tokens", int(chunk.EvalTokens)),
+				attribute.String("finish_reason", chunk.FinishReason),
+			)
 		}
 		return stream.Send(msg)
 	})
+	runtimeSpan.SetAttributes(attribute.Int("chunks", chunks))
+	if err != nil {
+		runtimeSpan.RecordError(err)
+		runtimeSpan.SetStatus(otelcodes.Error, err.Error())
+	}
+	runtimeSpan.End()
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, err.Error())
+	}
 	return mapError(err)
 }
 

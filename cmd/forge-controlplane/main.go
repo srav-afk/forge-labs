@@ -168,6 +168,20 @@ func run(
 ) error {
 	defer rdb.Close()
 
+	tr, err := observability.NewTracer(observability.TraceConfig{
+		ServiceName:  "forge-controlplane",
+		OTLPEndpoint: k.String("otlp.endpoint"),
+		SampleRatio:  k.Float64("trace.sample.ratio"),
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = tr.Shutdown(ctx)
+	}()
+
 	buildInfo := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "forge_controlplane_build_info",
 		Help: "Control plane build metadata, always 1.",
@@ -212,7 +226,7 @@ func serveGRPC(addr string, svc registry.RegistryService) {
 	if err != nil {
 		log.Fatalf("grpc listen: %v", err)
 	}
-	s := grpc.NewServer()
+	s := grpc.NewServer(observability.GRPCServerOption())
 	registryv1.RegisterRegistryServiceServer(s, svc)
 	reflection.Register(s)
 	log.Printf("registry gRPC listening on %s", addr)
@@ -225,6 +239,7 @@ func serveHTTP(addr string, gw *gateway.Handler) error {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(observability.GinMiddleware("forge-controlplane"))
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})

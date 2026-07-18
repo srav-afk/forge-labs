@@ -24,6 +24,8 @@ func ControlPlaneDefaults() map[string]any {
 		"reliability.breaker.failure.ratio": 0.5,
 		"reliability.breaker.timeout":       "5s",
 		"reliability.breaker.min.requests":  10,
+		"otlp.endpoint":                     "localhost:4317",
+		"trace.sample.ratio":                1.0,
 	}
 }
 
@@ -43,6 +45,8 @@ func WorkerDefaults() map[string]any {
 		"worker.ready":         true,
 		"ollama.url":           "http://127.0.0.1:11434",
 		"ollama.keep.alive":    "5m",
+		"otlp.endpoint":        "localhost:4317",
+		"trace.sample.ratio":   1.0,
 		"worker.capabilities": map[string]string{
 			"accelerator":    "apple-m3-pro",
 			"quantization":   "Q4_K_M",
