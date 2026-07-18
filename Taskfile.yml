@@ -36,6 +36,11 @@ tasks:
     cmds:
       - ./scripts/lab-down.sh
 
+  lab:status:
+    desc: Show lab ports and gateway health
+    cmds:
+      - ./scripts/lab-status.sh
+
   worker:run:
     desc: Run forge-worker against local config
     deps: [gen]

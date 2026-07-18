@@ -35,6 +35,7 @@ Forge is the control plane. One base URL for every tool and service you already 
 
 ```bash
 ./scripts/lab-up.sh
+./scripts/lab-status.sh
 
 curl -s http://127.0.0.1:8080/v1/models
 curl -s http://127.0.0.1:8080/v1/chat/completions \
@@ -42,18 +43,20 @@ curl -s http://127.0.0.1:8080/v1/chat/completions \
   -d '{"model":"qwen3.5:0.8b","messages":[{"role":"user","content":"hi"}],"max_tokens":32}'
 ```
 
-The lab stack uses `development.tier-a.env` and `docker-compose.tier-a.yml` (Postgres on `25432`, Redis on `26379`) so it does not collide with other local databases. Optional secrets live in gitignored `development.secrets.env` (provider and cloud API keys).
+**Hard rule:** control plane and every worker must share the same `FORGE_ENV_FILE` (same Postgres and Redis). Mismatched env is the usual cause of empty capacity despite models listing. Details: [`docs/lab.md`](docs/lab.md).
+
+The default lab uses `development.tier-a.env` + `docker-compose.tier-a.yml` (Postgres `25432`, Redis `26379`). Optional secrets: gitignored `development.secrets.env`.
 
 ```bash
-FORGE_ENV_FILE=development.tier-a.env go run ./cmd/forge-controlplane
-FORGE_ENV_FILE=development.tier-a.env go run ./cmd/forge-worker
-
-FORGE_ENV_FILE=development.tier-a.env go run ./cmd/forge-catalog models
+export FORGE_ENV_FILE=development.tier-a.env
+go run ./cmd/forge-controlplane
+go run ./cmd/forge-worker
+go run ./cmd/forge-catalog models
 ```
 
-Point any OpenAI client at `http://127.0.0.1:8080/v1`. Use different model names to hit local engines versus registered remote providers — same gateway, different placement.
+Point any OpenAI client at `http://127.0.0.1:8080/v1`. Different model names select local engines versus registered remote providers.
 
-Operational detail: [`docs/ops-lab.md`](docs/ops-lab.md). Remote GPU notes: [`deploy/runpod/README.md`](deploy/runpod/README.md).
+More ops: [`docs/ops-lab.md`](docs/ops-lab.md). Remote GPU: [`deploy/runpod/README.md`](deploy/runpod/README.md).
 
 ## How a request flows
 
