@@ -76,17 +76,26 @@ func main() {
 		)
 	}))
 	must(c.Provide(scheduler.NewMetrics))
-	must(c.Provide(func() *scheduler.Chain {
-		return scheduler.DefaultChain()
+	must(c.Provide(func(sm *scheduler.Metrics, k *koanf.Koanf) *scheduler.LatencyStore {
+		return scheduler.NewLatencyStore(config.Duration(k, "scheduler.ewma.tau", 10*time.Second), sm)
+	}))
+	must(c.Provide(func(sm *scheduler.Metrics, k *koanf.Koanf) *scheduler.Chain {
+		return scheduler.NewConfiguredChain(scheduler.ChainConfig{
+			WeightLoad:    k.Float64("scheduler.weight.load"),
+			WeightLatency: k.Float64("scheduler.weight.latency"),
+			LatencyRefMs:  k.Float64("scheduler.latency.ref.ms"),
+			Metrics:       sm,
+		})
 	}))
 	must(c.Provide(gateway.NewMetrics))
 	must(c.Provide(func(
 		holder *routing.SnapshotHolder,
 		inflight *routing.InflightTracker,
+		latency *scheduler.LatencyStore,
 		chain *scheduler.Chain,
 		sm *scheduler.Metrics,
 	) gateway.WorkerSelector {
-		return gateway.NewSnapshotSelector(holder, inflight, chain, sm)
+		return gateway.NewSnapshotSelector(holder, inflight, latency, chain, sm)
 	}))
 	must(c.Provide(gateway.NewHandler))
 

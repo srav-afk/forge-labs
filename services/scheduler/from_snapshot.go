@@ -6,7 +6,11 @@ type LoadSource interface {
 	Get(workerID string) int
 }
 
-func CandidatesFromSnapshot(snap *routing.RoutingSnapshot, load LoadSource) []Candidate {
+type LatencySource interface {
+	Get(workerID string) float64
+}
+
+func CandidatesFromSnapshot(snap *routing.RoutingSnapshot, load LoadSource, latency LatencySource) []Candidate {
 	if snap == nil {
 		return nil
 	}
@@ -19,13 +23,18 @@ func CandidatesFromSnapshot(snap *routing.RoutingSnapshot, load LoadSource) []Ca
 			if load != nil {
 				extra = load.Get(w.ID)
 			}
+			ewma := 0.0
+			if latency != nil {
+				ewma = latency.Get(w.ID)
+			}
 			c = &Candidate{
-				WorkerID:   w.ID,
-				Endpoint:   w.Endpoint,
-				QueueDepth: w.QueueDepth + w.InFlight + extra,
-				Healthy:    w.Healthy,
-				Ready:      w.Ready,
-				Models:     nil,
+				WorkerID:      w.ID,
+				Endpoint:      w.Endpoint,
+				QueueDepth:    w.QueueDepth + w.InFlight + extra,
+				Healthy:       w.Healthy,
+				Ready:         w.Ready,
+				EwmaLatencyMs: ewma,
+				Models:        nil,
 			}
 			byID[w.ID] = c
 			order = append(order, w.ID)

@@ -77,7 +77,7 @@ func TestCandidatesMergeInflight(t *testing.T) {
 			{ID: "w2", Endpoint: "e2", BaseModel: "m", Healthy: true, Ready: true},
 		},
 	}
-	cs := CandidatesFromSnapshot(snap, inf)
+	cs := CandidatesFromSnapshot(snap, inf, nil)
 	if len(cs) != 2 {
 		t.Fatalf("len=%d", len(cs))
 	}

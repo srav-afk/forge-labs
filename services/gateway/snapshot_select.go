@@ -18,6 +18,7 @@ var (
 type SnapshotSelector struct {
 	holder   *routing.SnapshotHolder
 	inflight *routing.InflightTracker
+	latency  *scheduler.LatencyStore
 	chain    *scheduler.Chain
 	metrics  *scheduler.Metrics
 }
@@ -25,12 +26,14 @@ type SnapshotSelector struct {
 func NewSnapshotSelector(
 	holder *routing.SnapshotHolder,
 	inflight *routing.InflightTracker,
+	latency *scheduler.LatencyStore,
 	chain *scheduler.Chain,
 	metrics *scheduler.Metrics,
 ) *SnapshotSelector {
 	return &SnapshotSelector{
 		holder:   holder,
 		inflight: inflight,
+		latency:  latency,
 		chain:    chain,
 		metrics:  metrics,
 	}
@@ -44,9 +47,9 @@ func (s *SnapshotSelector) SelectWorker(model string) (*SelectedWorker, error) {
 
 	base, adapter := ParseModelID(model)
 	req := &scheduler.Request{BaseModel: base, Adapter: adapter}
-	candidates := scheduler.CandidatesFromSnapshot(snap, s.inflight)
+	candidates := scheduler.CandidatesFromSnapshot(snap, s.inflight, s.latency)
 
-	pick, err := s.chain.Pick(context.Background(), req, candidates)
+	pick, err := s.chain.PickWithMetrics(context.Background(), req, candidates, s.metrics)
 	if err != nil {
 		if errors.Is(err, scheduler.ErrNoCapacity) {
 			return nil, fmt.Errorf("%w: model %q", scheduler.ErrNoCapacity, model)
@@ -98,6 +101,9 @@ func (s *SnapshotSelector) ListModels() []modelObject {
 	return out
 }
 
-func (s *SnapshotSelector) Inflight() *routing.InflightTracker {
-	return s.inflight
+func (s *SnapshotSelector) ObserveLatency(workerID string, sampleMs float64) {
+	if s.latency == nil {
+		return
+	}
+	s.latency.Observe(workerID, sampleMs)
 }

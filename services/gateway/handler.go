@@ -19,22 +19,37 @@ import (
 
 	workerv1 "github.com/srav-afk/forge-labs/gen/worker/v1"
 	"github.com/srav-afk/forge-labs/services/routing"
+	"github.com/srav-afk/forge-labs/services/scheduler"
 )
 
 type Handler struct {
 	selector WorkerSelector
 	inflight *routing.InflightTracker
+	latency  *scheduler.LatencyStore
 	metrics  *Metrics
 	dial     func(ctx context.Context, endpoint string) (workerv1.WorkerServiceClient, func(), error)
 }
 
-func NewHandler(selector WorkerSelector, inflight *routing.InflightTracker, metrics *Metrics) *Handler {
+func NewHandler(
+	selector WorkerSelector,
+	inflight *routing.InflightTracker,
+	latency *scheduler.LatencyStore,
+	metrics *Metrics,
+) *Handler {
 	return &Handler{
 		selector: selector,
 		inflight: inflight,
+		latency:  latency,
 		metrics:  metrics,
 		dial:     dialWorker,
 	}
+}
+
+func (h *Handler) observeLatency(workerID string, started time.Time) {
+	if h.latency == nil || workerID == "" {
+		return
+	}
+	h.latency.Observe(workerID, float64(time.Since(started).Milliseconds()))
 }
 
 func (h *Handler) track(workerID string) func() {
@@ -94,6 +109,7 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 	}
 	done := h.track(worker.ID)
 	defer done()
+	defer h.observeLatency(worker.ID, start)
 
 	prompt := messagesToPrompt(req.Messages)
 	genReq := toWorkerRequest(req.Model, prompt, req.Temperature, req.TopP, maxTokensFromChat(req))
@@ -164,6 +180,7 @@ func (h *Handler) completions(c *gin.Context) {
 	}
 	done := h.track(worker.ID)
 	defer done()
+	defer h.observeLatency(worker.ID, start)
 
 	genReq := toWorkerRequest(req.Model, prompt, req.Temperature, req.TopP, req.MaxTokens)
 	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage

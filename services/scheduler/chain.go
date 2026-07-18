@@ -17,10 +17,32 @@ func NewChain(filters []Filter, scorers []WeightedScorer) *Chain {
 	return &Chain{Filters: filters, Scorers: scorers}
 }
 
+type ChainConfig struct {
+	WeightLoad    float64
+	WeightLatency float64
+	LatencyRefMs  float64
+	Metrics       *Metrics
+}
+
 func DefaultChain() *Chain {
+	return NewConfiguredChain(ChainConfig{
+		WeightLoad:    0.8,
+		WeightLatency: 0.2,
+		LatencyRefMs:  100,
+	})
+}
+
+func NewConfiguredChain(cfg ChainConfig) *Chain {
+	wl, wlat := cfg.WeightLoad, cfg.WeightLatency
+	if wl <= 0 && wlat <= 0 {
+		wl, wlat = 0.8, 0.2
+	}
 	return NewChain(
-		[]Filter{HealthFilter{}, ModelFilter{}},
-		[]WeightedScorer{{Scorer: LeastLoaded{}, Weight: 1}},
+		[]Filter{HealthFilter{Metrics: cfg.Metrics}, ModelFilter{}},
+		[]WeightedScorer{
+			{Scorer: LeastLoaded{}, Weight: wl},
+			{Scorer: NewLatencyScorer(cfg.LatencyRefMs), Weight: wlat},
+		},
 	)
 }
 
@@ -69,4 +91,15 @@ func (ch *Chain) Pick(ctx context.Context, req *Request, candidates []Candidate)
 		Endpoint: best.c.Endpoint,
 		Score:    best.total,
 	}, nil
+}
+
+func (ch *Chain) PickWithMetrics(ctx context.Context, req *Request, candidates []Candidate, metrics *Metrics) (PickResult, error) {
+	p, err := ch.Pick(ctx, req, candidates)
+	if err != nil {
+		return p, err
+	}
+	if metrics != nil {
+		metrics.SetScore(p.WorkerID, p.Score)
+	}
+	return p, nil
 }

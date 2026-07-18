@@ -9,6 +9,10 @@ func ControlPlaneDefaults() map[string]any {
 		"redis.url":                 "redis://localhost:6379/0",
 		"heartbeat.reconcile":       "3s",
 		"routing.snapshot.interval": "500ms",
+		"scheduler.weight.load":     0.8,
+		"scheduler.weight.latency":  0.2,
+		"scheduler.latency.ref.ms":  100.0,
+		"scheduler.ewma.tau":        "10s",
 	}
 }
 

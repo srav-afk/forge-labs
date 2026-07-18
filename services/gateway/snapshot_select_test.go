@@ -10,7 +10,7 @@ import (
 )
 
 func newTestSelector(h *routing.SnapshotHolder) *SnapshotSelector {
-	return NewSnapshotSelector(h, routing.NewInflightTracker(), scheduler.DefaultChain(), nil)
+	return NewSnapshotSelector(h, routing.NewInflightTracker(), scheduler.NewLatencyStore(10*time.Second, nil), scheduler.DefaultChain(), nil)
 }
 
 func TestSnapshotSelectorNoSnapshot(t *testing.T) {
@@ -64,6 +64,31 @@ func TestSnapshotSelectorLeastLoaded(t *testing.T) {
 	}
 	if w.ID != "idle" {
 		t.Fatalf("got %s", w.ID)
+	}
+}
+
+func TestSnapshotSelectorPrefersLowerEWMA(t *testing.T) {
+	h := routing.NewSnapshotHolder()
+	h.Store(&routing.RoutingSnapshot{
+		Epoch: 1,
+		Workers: []routing.WorkerView{
+			{ID: "slow", Endpoint: "s", BaseModel: "m", Healthy: true, Ready: true},
+			{ID: "fast", Endpoint: "f", BaseModel: "m", Healthy: true, Ready: true},
+		},
+	})
+	store := scheduler.NewLatencyStore(10*time.Second, nil)
+	// inject: simulate sustained samples by updating EWMA directly via many observes with tiny dt
+	// seed then observe with forced values using Observe after manual
+	// first observe seeds
+	store.Observe("slow", 400)
+	store.Observe("fast", 40)
+	s := NewSnapshotSelector(h, routing.NewInflightTracker(), store, scheduler.DefaultChain(), nil)
+	w, err := s.SelectWorker("m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.ID != "fast" {
+		t.Fatalf("got %s want fast", w.ID)
 	}
 }
 

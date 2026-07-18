@@ -3,12 +3,13 @@ package scheduler
 import "context"
 
 type Candidate struct {
-	WorkerID   string
-	Endpoint   string
-	QueueDepth int
-	Healthy    bool
-	Ready      bool
-	Models     []string
+	WorkerID      string
+	Endpoint      string
+	QueueDepth    int
+	Healthy       bool
+	Ready         bool
+	EwmaLatencyMs float64
+	Models        []string
 }
 
 type Request struct {
