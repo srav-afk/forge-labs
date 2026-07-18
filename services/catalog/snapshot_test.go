@@ -9,9 +9,9 @@ func TestSnapshotResolve(t *testing.T) {
 	s := &Snapshot{
 		BuiltAt: time.Now(),
 		ByName: map[string]ModelIdentity{
-			"qwen2.5-7b": {ID: "m2", Name: "qwen2.5-7b", BaseModel: "qwen2.5-7b"},
+			"qwen3:8b": {ID: "m2", Name: "qwen3:8b", BaseModel: "qwen3:8b"},
 			"support-bot": {
-				ID: "m3", Name: "support-bot", BaseModel: "llama-3.1-8b", Adapter: "support-bot-v3",
+				ID: "m3", Name: "support-bot", BaseModel: "qwen3:8b", Adapter: "support-bot-v3",
 			},
 		},
 		WorkersByModel: map[string][]string{
@@ -20,12 +20,12 @@ func TestSnapshotResolve(t *testing.T) {
 		},
 	}
 
-	id, workers, ok := s.Resolve("qwen2.5-7b")
+	id, workers, ok := s.Resolve("qwen3:8b")
 	if !ok || id.ID != "m2" || len(workers) != 1 || workers[0] != "workerB" {
 		t.Fatalf("qwen: id=%+v workers=%v ok=%v", id, workers, ok)
 	}
 	id, workers, ok = s.Resolve("support-bot")
-	if !ok || id.BaseModel != "llama-3.1-8b" || id.Adapter != "support-bot-v3" || workers[0] != "workerA" {
+	if !ok || id.BaseModel != "qwen3:8b" || id.Adapter != "support-bot-v3" || workers[0] != "workerA" {
 		t.Fatalf("lora: id=%+v workers=%v", id, workers)
 	}
 	if _, _, ok := s.Resolve("missing"); ok {

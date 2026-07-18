@@ -10,10 +10,10 @@ import (
 
 func TestPickLeastLoadedDeterministic(t *testing.T) {
 	ch := DefaultChain()
-	req := &Request{BaseModel: "llama3.1:8b"}
+	req := &Request{BaseModel: "qwen3:8b"}
 	candidates := []Candidate{
-		{WorkerID: "worker-b", Endpoint: "b:1", QueueDepth: 0, Healthy: true, Ready: true, Models: []string{"llama3.1:8b"}},
-		{WorkerID: "worker-a", Endpoint: "a:1", QueueDepth: 0, Healthy: true, Ready: true, Models: []string{"llama3.1:8b"}},
+		{WorkerID: "worker-b", Endpoint: "b:1", QueueDepth: 0, Healthy: true, Ready: true, Models: []string{"qwen3:8b"}},
+		{WorkerID: "worker-a", Endpoint: "a:1", QueueDepth: 0, Healthy: true, Ready: true, Models: []string{"qwen3:8b"}},
 	}
 	// equal scores → lexicographically smaller id
 	p, err := ch.Pick(context.Background(), req, candidates)

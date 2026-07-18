@@ -31,17 +31,17 @@ func TestWorkedExamplePodAWins(t *testing.T) {
 		WeightCost:     0.4,
 		AdmissionLimit: 8,
 	})
-	req := &Request{BaseModel: "llama-3.1-70b"}
+	req := &Request{BaseModel: "Qwen/Qwen3-235B-A22B"}
 	cands := []Candidate{
 		{
 			WorkerID: "pod-a", Endpoint: "a", Healthy: true, Ready: true,
 			QueueDepth: 3, CostPerHour: 1.19, CostClass: "paid",
-			Models: []string{"llama-3.1-70b"}, MaxContext: 131072,
+			Models: []string{"Qwen/Qwen3-235B-A22B"}, MaxContext: 131072,
 		},
 		{
 			WorkerID: "pod-b", Endpoint: "b", Healthy: true, Ready: true,
 			QueueDepth: 1, CostPerHour: 2.69, CostClass: "paid",
-			Models: []string{"llama-3.1-70b"}, MaxContext: 131072,
+			Models: []string{"Qwen/Qwen3-235B-A22B"}, MaxContext: 131072,
 		},
 	}
 	pick, err := ch.Pick(context.Background(), req, cands)
@@ -57,17 +57,17 @@ func TestFreeMacWinsWhenCapable(t *testing.T) {
 	ch := NewConfiguredChain(ChainConfig{
 		WeightLoad: 0.6, WeightCost: 0.4, AdmissionLimit: 8,
 	})
-	req := &Request{BaseModel: "qwen2.5-7b"}
+	req := &Request{BaseModel: "qwen3:8b"}
 	cands := []Candidate{
 		{
 			WorkerID: "mac-1", Endpoint: "m", Healthy: true, Ready: true,
 			QueueDepth: 2, CostPerHour: 0, CostClass: "free",
-			Models: []string{"qwen2.5-7b"}, MaxContext: 32768,
+			Models: []string{"qwen3:8b"}, MaxContext: 32768,
 		},
 		{
 			WorkerID: "pod-a", Endpoint: "a", Healthy: true, Ready: true,
 			QueueDepth: 0, CostPerHour: 1.19, CostClass: "paid",
-			Models: []string{"qwen2.5-7b", "llama-3.1-70b"}, MaxContext: 131072,
+			Models: []string{"qwen3:8b", "Qwen/Qwen3-235B-A22B"}, MaxContext: 131072,
 		},
 	}
 	pick, err := ch.Pick(context.Background(), req, cands)
@@ -81,11 +81,11 @@ func TestFreeMacWinsWhenCapable(t *testing.T) {
 
 func TestCapabilityFilterDropsIncapable(t *testing.T) {
 	f := CapabilityFilter{}
-	req := &Request{BaseModel: "llama-3.1-70b", MinContext: 100000}
+	req := &Request{BaseModel: "Qwen/Qwen3-235B-A22B", MinContext: 100000}
 	in := []Candidate{
-		{WorkerID: "mac-1", Models: []string{"qwen2.5-7b"}, MaxContext: 32768},
-		{WorkerID: "pod-a", Models: []string{"llama-3.1-70b"}, MaxContext: 131072},
-		{WorkerID: "pod-short", Models: []string{"llama-3.1-70b"}, MaxContext: 8192},
+		{WorkerID: "mac-1", Models: []string{"qwen3:8b"}, MaxContext: 32768},
+		{WorkerID: "pod-a", Models: []string{"Qwen/Qwen3-235B-A22B"}, MaxContext: 131072},
+		{WorkerID: "pod-short", Models: []string{"Qwen/Qwen3-235B-A22B"}, MaxContext: 8192},
 	}
 	out := f.Filter(context.Background(), req, in)
 	if len(out) != 1 || out[0].WorkerID != "pod-a" {
@@ -95,15 +95,15 @@ func TestCapabilityFilterDropsIncapable(t *testing.T) {
 
 func TestSeventyBSkipsMac(t *testing.T) {
 	ch := DefaultChain()
-	req := &Request{BaseModel: "meta-llama/Llama-3.1-70B-Instruct"}
+	req := &Request{BaseModel: "Qwen/Qwen3-235B-A22B"}
 	cands := []Candidate{
 		{
 			WorkerID: "mac-1", Endpoint: "m", Healthy: true, Ready: true,
-			CostPerHour: 0, Models: []string{"qwen2.5-7b", "llama-3.2-3b"},
+			CostPerHour: 0, Models: []string{"qwen3:8b", "qwen3:4b"},
 		},
 		{
 			WorkerID: "pod-a", Endpoint: "100.81.4.12:50051", Healthy: true, Ready: true,
-			CostPerHour: 1.19, Models: []string{"meta-llama/Llama-3.1-70B-Instruct"},
+			CostPerHour: 1.19, Models: []string{"Qwen/Qwen3-235B-A22B"},
 		},
 	}
 	pick, err := ch.Pick(context.Background(), req, cands)

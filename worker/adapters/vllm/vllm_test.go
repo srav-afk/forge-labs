@@ -36,12 +36,12 @@ func TestGenerateStreamsSSE(t *testing.T) {
 
 	a := New(Config{
 		BaseURL:     srv.URL,
-		ServedModel: "meta-llama/Llama-3.1-70B-Instruct",
-		ForgeModel:  "llama-3.1-70b",
+		ServedModel: "Qwen/Qwen3-235B-A22B",
+		ForgeModel:  "qwen3-235b-a22b",
 	})
 	var got []adapters.TokenChunk
 	err := a.Generate(context.Background(), adapters.GenerateRequest{
-		Model:  "llama-3.1-70b",
+		Model:  "qwen3-235b-a22b",
 		Prompt: "hi",
 	}, func(c adapters.TokenChunk) error {
 		got = append(got, c)
@@ -64,20 +64,20 @@ func TestGenerateStreamsSSE(t *testing.T) {
 
 func TestCapabilitiesNormalizesModel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"data":[{"id":"meta-llama/Llama-3.1-70B-Instruct"}]}`)
+		_, _ = io.WriteString(w, `{"data":[{"id":"Qwen/Qwen3-235B-A22B"}]}`)
 	}))
 	defer srv.Close()
 
 	a := New(Config{
 		BaseURL:     srv.URL,
-		ServedModel: "meta-llama/Llama-3.1-70B-Instruct",
-		ForgeModel:  "llama-3.1-70b",
+		ServedModel: "Qwen/Qwen3-235B-A22B",
+		ForgeModel:  "qwen3-235b-a22b",
 	})
 	caps, err := a.Capabilities(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if caps.Runtime != "vllm" || len(caps.Models) != 1 || caps.Models[0].BaseModel != "llama-3.1-70b" {
+	if caps.Runtime != "vllm" || len(caps.Models) != 1 || caps.Models[0].BaseModel != "qwen3-235b-a22b" {
 		t.Fatalf("%+v", caps)
 	}
 }

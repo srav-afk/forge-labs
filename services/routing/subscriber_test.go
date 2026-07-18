@@ -30,7 +30,7 @@ func TestJSONRoundTrip(t *testing.T) {
 		BuiltAt: time.Date(2026, 6, 15, 10, 30, 0, 512e6, time.UTC),
 		Epoch:   84213,
 		Workers: []WorkerView{
-			{ID: "w-ollama-01", Endpoint: "127.0.0.1:50051", BaseModel: "llama3.1:8b", Healthy: true, Ready: true, QueueDepth: 2, InFlight: 1},
+			{ID: "w-ollama-01", Endpoint: "127.0.0.1:50051", BaseModel: "qwen3:8b", Healthy: true, Ready: true, QueueDepth: 2, InFlight: 1},
 		},
 	}
 	b, err := json.Marshal(in)
