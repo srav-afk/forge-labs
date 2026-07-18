@@ -24,6 +24,7 @@ import (
 	"github.com/srav-afk/forge-labs/internal/db"
 	"github.com/srav-afk/forge-labs/internal/observability"
 	"github.com/srav-afk/forge-labs/internal/redisx"
+	"github.com/srav-afk/forge-labs/services/cacheregistry"
 	"github.com/srav-afk/forge-labs/services/catalog"
 	"github.com/srav-afk/forge-labs/services/fleet"
 	"github.com/srav-afk/forge-labs/services/gateway"
@@ -102,19 +103,21 @@ func main() {
 	must(c.Provide(func(sm *scheduler.Metrics, k *koanf.Koanf) *scheduler.LatencyStore {
 		return scheduler.NewLatencyStore(config.Duration(k, "scheduler.ewma.tau", 10*time.Second), sm)
 	}))
-	must(c.Provide(func(sm *scheduler.Metrics, ph *routing.PolicyHolder, k *koanf.Koanf) *scheduler.Chain {
+	must(c.Provide(func(sm *scheduler.Metrics, ph *routing.PolicyHolder, cache *cacheregistry.Service, k *koanf.Koanf) *scheduler.Chain {
 		return scheduler.NewConfiguredChain(scheduler.ChainConfig{
 			WeightLoad:     k.Float64("scheduler.weight.load"),
 			WeightLatency:  k.Float64("scheduler.weight.latency"),
 			WeightAffinity: k.Float64("scheduler.weight.affinity"),
 			WeightCost:     k.Float64("scheduler.weight.cost"),
-			WeightPolicy:   0.2,
+			WeightPolicy:   0.15,
+			WeightOverlap:  0.15,
 			LatencyRefMs:   k.Float64("scheduler.latency.ref.ms"),
 			AdmissionLimit: k.Int("admission.per.worker.limit"),
 			AffinityWindow: k.Int("affinity.prefix.window"),
 			AffinityBlock:  k.Int("affinity.block.bytes"),
 			Metrics:        sm,
 			Policy:         scheduler.NewPolicyScorer(ph),
+			Overlap:        scheduler.NewOverlapScorer(cache.Holder()),
 		})
 	}))
 	must(c.Provide(gateway.NewMetrics))
@@ -200,6 +203,9 @@ func main() {
 		return mgr
 	}))
 	must(c.Provide(provider.NewRegistry))
+	must(c.Provide(func(rdb *redis.Client, reg *observability.Registry) *cacheregistry.Service {
+		return cacheregistry.NewService(rdb, reg)
+	}))
 
 	must(c.Invoke(run))
 }
@@ -219,6 +225,7 @@ func run(
 	fleetMgr *fleet.Manager,
 	activator gateway.Activator,
 	providers *provider.Registry,
+	cacheSvc *cacheregistry.Service,
 	gw *gateway.Handler,
 ) error {
 	defer rdb.Close()
@@ -252,6 +259,7 @@ func run(
 	plannerSvc.Start(ctx)
 	fleetMgr.Start(ctx)
 	providers.Start(ctx)
+	cacheSvc.Start(ctx)
 	pub.SetVirtualSource(providers)
 	gw.SetActivator(activator)
 	gw.SetProviders(providers)

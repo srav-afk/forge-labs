@@ -34,6 +34,8 @@ type ChainConfig struct {
 	AffinityBlock  int
 	Metrics        *Metrics
 	Policy         *PolicyScorer
+	Overlap        *OverlapScorer
+	WeightOverlap  float64
 }
 
 func DefaultChain() *Chain {
@@ -81,6 +83,10 @@ func NewConfiguredChain(cfg ChainConfig) *Chain {
 	}
 	if wp > 0 && cfg.Policy != nil {
 		scorers = append(scorers, WeightedScorer{Scorer: cfg.Policy, Weight: wp})
+	}
+	wo := cfg.WeightOverlap
+	if wo > 0 && cfg.Overlap != nil {
+		scorers = append(scorers, WeightedScorer{Scorer: cfg.Overlap, Weight: wo})
 	}
 	return NewChain(filters, scorers)
 }
