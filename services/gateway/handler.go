@@ -78,8 +78,8 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 
 	worker, err := h.selector.SelectWorker(req.Model)
 	if err != nil {
-		statusCode = http.StatusNotFound
-		writeOpenAIError(c, statusCode, err.Error(), "invalid_request_error", "model_not_found")
+		statusCode, typ, code := selectErrorStatus(err)
+		writeOpenAIError(c, statusCode, err.Error(), typ, code)
 		return
 	}
 
@@ -146,8 +146,8 @@ func (h *Handler) completions(c *gin.Context) {
 
 	worker, err := h.selector.SelectWorker(req.Model)
 	if err != nil {
-		statusCode = http.StatusNotFound
-		writeOpenAIError(c, statusCode, err.Error(), "invalid_request_error", "model_not_found")
+		statusCode, typ, code := selectErrorStatus(err)
+		writeOpenAIError(c, statusCode, err.Error(), typ, code)
 		return
 	}
 

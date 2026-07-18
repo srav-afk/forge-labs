@@ -28,6 +28,7 @@ import (
 	"github.com/srav-afk/forge-labs/services/health"
 	"github.com/srav-afk/forge-labs/services/registry"
 	registryimpl "github.com/srav-afk/forge-labs/services/registry/impl"
+	"github.com/srav-afk/forge-labs/services/routing"
 )
 
 const version = "0.1.0"
@@ -51,9 +52,30 @@ func main() {
 	must(c.Provide(func(rdb *redis.Client, m *health.Metrics, k *koanf.Koanf) *health.Service {
 		return health.NewService(rdb, m, config.Duration(k, "heartbeat.reconcile", 3*time.Second))
 	}))
+	must(c.Provide(routing.NewSnapshotHolder))
+	must(c.Provide(func(reg *observability.Registry, holder *routing.SnapshotHolder) *routing.Metrics {
+		return routing.NewMetrics(reg, holder)
+	}))
+	must(c.Provide(func(
+		rdb *redis.Client,
+		repo registry.WorkerRepository,
+		healthSvc *health.Service,
+		holder *routing.SnapshotHolder,
+		rm *routing.Metrics,
+		k *koanf.Koanf,
+	) *routing.Publisher {
+		return routing.NewPublisher(
+			rdb,
+			repo,
+			healthSvc,
+			holder,
+			rm,
+			config.Duration(k, "routing.snapshot.interval", 500*time.Millisecond),
+		)
+	}))
 	must(c.Provide(gateway.NewMetrics))
-	must(c.Provide(func(repo registry.WorkerRepository, k *koanf.Koanf) gateway.WorkerSelector {
-		return gateway.NewRegistrySelector(repo, k.String("gateway.worker.endpoint"))
+	must(c.Provide(func(holder *routing.SnapshotHolder) gateway.WorkerSelector {
+		return gateway.NewSnapshotSelector(holder)
 	}))
 	must(c.Provide(gateway.NewHandler))
 
@@ -66,7 +88,9 @@ func run(
 	svc registry.RegistryService,
 	healthSvc *health.Service,
 	rdb *redis.Client,
-	selector gateway.WorkerSelector,
+	holder *routing.SnapshotHolder,
+	rm *routing.Metrics,
+	pub *routing.Publisher,
 	gw *gateway.Handler,
 ) error {
 	defer rdb.Close()
@@ -82,11 +106,8 @@ func run(
 	defer stop()
 
 	healthSvc.Start(ctx)
-	if rs, ok := selector.(interface {
-		Start(context.Context, time.Duration)
-	}); ok {
-		rs.Start(ctx, config.Duration(k, "gateway.selector.refresh", 5*time.Second))
-	}
+	go routing.RunSubscriber(ctx, rdb, holder, rm)
+	pub.Start(ctx)
 
 	go serveMetrics(k.String("metrics.addr"), reg)
 	go serveGRPC(k.String("grpc.addr"), svc)

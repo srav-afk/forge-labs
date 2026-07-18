@@ -1,12 +1,20 @@
 package gateway
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func selectErrorStatus(err error) (httpStatus int, errType, code string) {
+	if errors.Is(err, ErrNoSnapshot) {
+		return http.StatusServiceUnavailable, "server_error", "no_snapshot"
+	}
+	return http.StatusNotFound, "invalid_request_error", "model_not_found"
+}
 
 type openAIErrorBody struct {
 	Error openAIError `json:"error"`

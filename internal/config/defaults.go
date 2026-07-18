@@ -2,14 +2,13 @@ package config
 
 func ControlPlaneDefaults() map[string]any {
 	return map[string]any{
-		"http.addr":                ":8080",
-		"metrics.addr":             ":9090",
-		"grpc.addr":                ":8081",
-		"db.url":                   "postgres://forge:forge@localhost:5432/forge?sslmode=disable",
-		"redis.url":                "redis://localhost:6379/0",
-		"heartbeat.reconcile":      "3s",
-		"gateway.worker.endpoint":  "127.0.0.1:50051",
-		"gateway.selector.refresh": "5s",
+		"http.addr":                 ":8080",
+		"metrics.addr":              ":9090",
+		"grpc.addr":                 ":8081",
+		"db.url":                    "postgres://forge:forge@localhost:5432/forge?sslmode=disable",
+		"redis.url":                 "redis://localhost:6379/0",
+		"heartbeat.reconcile":       "3s",
+		"routing.snapshot.interval": "500ms",
 	}
 }
 
