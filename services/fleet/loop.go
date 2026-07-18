@@ -30,6 +30,7 @@ type trackedWorker struct {
 type Manager struct {
 	policies    *PolicyCache
 	provisioner Provisioner
+	lifecycle   *Lifecycle
 	holder      *routing.SnapshotHolder
 	rdb         *redis.Client
 	metrics     *Metrics
@@ -58,6 +59,22 @@ func NewManager(
 		interval:    15 * time.Second,
 		workers:     map[WorkerID]*trackedWorker{},
 		desired:     map[string]int{},
+	}
+}
+
+func (m *Manager) SetLifecycle(l *Lifecycle) {
+	m.lifecycle = l
+	if l != nil {
+		l.OnWorkerReady(func(wid WorkerID, id ModelIdentity) {
+			m.mu.Lock()
+			if w := m.workers[wid]; w != nil {
+				w.State = StateReady
+			}
+			m.mu.Unlock()
+			if m.metrics != nil {
+				m.metrics.SetReady(id.Key(), m.readyCount(id))
+			}
+		})
 	}
 }
 
@@ -141,8 +158,10 @@ func (m *Manager) reconcile(ctx context.Context, id ModelIdentity) error {
 		_ = m.rdb.Set(ctx, "fleet:desired:"+id.Key(), desired, 0).Err()
 	}
 
+	pending := m.provisioningCount(id)
+	effective := ready + pending
 	switch {
-	case desired > ready:
+	case desired > effective:
 		return m.scaleUp(ctx, id)
 	case desired < ready:
 		return m.drainOne(ctx, id)
@@ -165,13 +184,41 @@ func (m *Manager) scaleUp(ctx context.Context, id ModelIdentity) error {
 		m.mu.Unlock()
 		return err
 	}
-	m.workers[wid] = &trackedWorker{ID: wid, Model: id, State: StateReady}
+	m.workers[wid] = &trackedWorker{ID: wid, Model: id, State: StateProvisioning}
 	m.mu.Unlock()
 	if m.metrics != nil {
 		m.metrics.IncScale(id.Key(), "up")
 	}
 	m.hyst.ClearPending(id.Key())
-	log.Printf("fleet: scale up %s -> %s via %s", id.Key(), wid, m.provisioner.Kind())
+	log.Printf("fleet: scale up provisioned %s -> %s via %s (waiting ready)", id.Key(), wid, m.provisioner.Kind())
+
+	if m.lifecycle != nil {
+		go func() {
+			wctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			defer cancel()
+			if err := m.lifecycle.WaitReady(wctx, wid, id); err != nil {
+				log.Printf("fleet: ready failed %s: %v (retiring)", wid, err)
+				_ = m.provisioner.Retire(context.Background(), wid)
+				m.mu.Lock()
+				if w := m.workers[wid]; w != nil {
+					w.State = StateRetired
+				}
+				m.mu.Unlock()
+				return
+			}
+			m.mu.Lock()
+			if w := m.workers[wid]; w != nil {
+				w.State = StateReady
+			}
+			m.mu.Unlock()
+		}()
+	} else {
+		m.mu.Lock()
+		if w := m.workers[wid]; w != nil {
+			w.State = StateReady
+		}
+		m.mu.Unlock()
+	}
 	return nil
 }
 
@@ -240,12 +287,30 @@ func (m *Manager) readyCount(id ModelIdentity) int {
 	}
 	m.mu.Lock()
 	for _, w := range m.workers {
-		if w.Model.Key() == id.Key() && (w.State == StateReady || w.State == StateProvisioning) {
+		if w.Model.Key() != id.Key() {
+			continue
+		}
+		switch w.State {
+		case StateReady:
 			seen[string(w.ID)] = struct{}{}
+		case StateProvisioning:
+			// in-flight provision counts toward desired gap fill but not "ready"
 		}
 	}
 	m.mu.Unlock()
 	return len(seen)
+}
+
+func (m *Manager) provisioningCount(id ModelIdentity) int {
+	n := 0
+	m.mu.Lock()
+	for _, w := range m.workers {
+		if w.Model.Key() == id.Key() && w.State == StateProvisioning {
+			n++
+		}
+	}
+	m.mu.Unlock()
+	return n
 }
 
 func (m *Manager) sumActive(id ModelIdentity) int {

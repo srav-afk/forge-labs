@@ -219,8 +219,12 @@ func main() {
 		holder *routing.SnapshotHolder,
 		rdb *redis.Client,
 		fm *fleet.Metrics,
+		gdb *gorm.DB,
 	) *fleet.Manager {
-		return fleet.NewManager(pol, prov, holder, rdb, fm)
+		mgr := fleet.NewManager(pol, prov, holder, rdb, fm)
+		lc := fleet.NewLifecycle(prov, holder, gdb, fleet.LifecycleConfig{})
+		mgr.SetLifecycle(lc)
+		return mgr
 	}))
 	must(c.Provide(func(mgr *fleet.Manager) gateway.Activator {
 		return mgr
