@@ -13,8 +13,11 @@ type Candidate struct {
 }
 
 type Request struct {
-	BaseModel string
-	Adapter   string
+	BaseModel       string
+	Adapter         string
+	Prompt          string
+	AffinityKey     string
+	PreferredWorker string
 }
 
 type Filter interface {

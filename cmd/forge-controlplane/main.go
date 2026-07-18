@@ -83,8 +83,11 @@ func main() {
 		return scheduler.NewConfiguredChain(scheduler.ChainConfig{
 			WeightLoad:     k.Float64("scheduler.weight.load"),
 			WeightLatency:  k.Float64("scheduler.weight.latency"),
+			WeightAffinity: k.Float64("scheduler.weight.affinity"),
 			LatencyRefMs:   k.Float64("scheduler.latency.ref.ms"),
 			AdmissionLimit: k.Int("admission.per.worker.limit"),
+			AffinityWindow: k.Int("affinity.prefix.window"),
+			AffinityBlock:  k.Int("affinity.block.bytes"),
 			Metrics:        sm,
 		})
 	}))

@@ -39,14 +39,14 @@ func NewSnapshotSelector(
 	}
 }
 
-func (s *SnapshotSelector) SelectWorker(model string) (*SelectedWorker, error) {
+func (s *SnapshotSelector) SelectWorker(model, prompt string) (*SelectedWorker, error) {
 	snap := s.holder.Load()
 	if snap == nil {
 		return nil, ErrNoSnapshot
 	}
 
 	base, adapter := ParseModelID(model)
-	req := &scheduler.Request{BaseModel: base, Adapter: adapter}
+	req := &scheduler.Request{BaseModel: base, Adapter: adapter, Prompt: prompt}
 	candidates := scheduler.CandidatesFromSnapshot(snap, s.inflight, s.latency)
 
 	pick, err := s.chain.PickWithMetrics(context.Background(), req, candidates, s.metrics)

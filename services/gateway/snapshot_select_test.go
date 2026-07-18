@@ -15,7 +15,7 @@ func newTestSelector(h *routing.SnapshotHolder) *SnapshotSelector {
 
 func TestSnapshotSelectorNoSnapshot(t *testing.T) {
 	s := newTestSelector(routing.NewSnapshotHolder())
-	_, err := s.SelectWorker("qwen3:8b")
+	_, err := s.SelectWorker("qwen3:8b", "hi")
 	if !errors.Is(err, ErrNoSnapshot) {
 		t.Fatalf("err=%v", err)
 	}
@@ -35,7 +35,7 @@ func TestSnapshotSelectorPicksHealthyReady(t *testing.T) {
 		},
 	})
 	s := newTestSelector(h)
-	w, err := s.SelectWorker("qwen3:8b")
+	w, err := s.SelectWorker("qwen3:8b", "hi")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestSnapshotSelectorLeastLoaded(t *testing.T) {
 		},
 	})
 	s := newTestSelector(h)
-	w, err := s.SelectWorker("m")
+	w, err := s.SelectWorker("m", "system: shared")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,13 +77,17 @@ func TestSnapshotSelectorPrefersLowerEWMA(t *testing.T) {
 		},
 	})
 	store := scheduler.NewLatencyStore(10*time.Second, nil)
-	// inject: simulate sustained samples by updating EWMA directly via many observes with tiny dt
-	// seed then observe with forced values using Observe after manual
-	// first observe seeds
 	store.Observe("slow", 400)
 	store.Observe("fast", 40)
-	s := NewSnapshotSelector(h, routing.NewInflightTracker(), store, scheduler.DefaultChain(), nil, 4)
-	w, err := s.SelectWorker("m")
+	chain := scheduler.NewConfiguredChain(scheduler.ChainConfig{
+		WeightLoad:     0.8,
+		WeightLatency:  0.2,
+		WeightAffinity: 0,
+		LatencyRefMs:   100,
+		AdmissionLimit: 4,
+	})
+	s := NewSnapshotSelector(h, routing.NewInflightTracker(), store, chain, nil, 4)
+	w, err := s.SelectWorker("m", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +106,7 @@ func TestSnapshotSelectorHotPathIsMemoryOnly(t *testing.T) {
 	})
 	s := newTestSelector(h)
 	for i := 0; i < 1000; i++ {
-		if _, err := s.SelectWorker("m"); err != nil {
+		if _, err := s.SelectWorker("m", "system: shared"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -117,7 +121,7 @@ func TestSnapshotSelectorNoCapacity(t *testing.T) {
 		},
 	})
 	s := newTestSelector(h)
-	_, err := s.SelectWorker("missing")
+	_, err := s.SelectWorker("missing", "x")
 	if !errors.Is(err, scheduler.ErrNoCapacity) {
 		t.Fatalf("err=%v", err)
 	}

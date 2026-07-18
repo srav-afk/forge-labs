@@ -125,7 +125,11 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		h.metrics.ObserveDuration("chat_completions", req.Model, req.Stream, statusCode, time.Since(start).Seconds())
 	}()
 
-	worker, err := h.selector.SelectWorker(req.Model)
+	prompt := messagesToPrompt(req.Messages)
+	if key := c.GetHeader("X-Session-Affinity"); key != "" {
+		prompt = key
+	}
+	worker, err := h.selector.SelectWorker(req.Model, prompt)
 	if err != nil {
 		statusCode, typ, code := selectErrorStatus(err)
 		if errors.Is(err, scheduler.ErrAdmissionRejected) {
@@ -150,8 +154,9 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 	defer h.observeLatency(worker.ID, start)
 	h.metrics.IncAdmitted(req.Model)
 
-	prompt := messagesToPrompt(req.Messages)
-	genReq := toWorkerRequest(req.Model, prompt, req.Temperature, req.TopP, maxTokensFromChat(req))
+	// routing may use affinity key; generation always uses full chat prompt
+	genPrompt := messagesToPrompt(req.Messages)
+	genReq := toWorkerRequest(req.Model, genPrompt, req.Temperature, req.TopP, maxTokensFromChat(req))
 	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
 
 	if req.Stream {
@@ -200,8 +205,8 @@ func (h *Handler) completions(c *gin.Context) {
 		writeOpenAIError(c, http.StatusBadRequest, "model is required", "invalid_request_error", "invalid_request")
 		return
 	}
-	prompt, err := promptFromCompletions(req.Prompt)
-	if err != nil || prompt == "" {
+	genPrompt, err := promptFromCompletions(req.Prompt)
+	if err != nil || genPrompt == "" {
 		writeOpenAIError(c, http.StatusBadRequest, "prompt is required", "invalid_request_error", "invalid_request")
 		return
 	}
@@ -211,7 +216,11 @@ func (h *Handler) completions(c *gin.Context) {
 		h.metrics.ObserveDuration("completions", req.Model, req.Stream, statusCode, time.Since(start).Seconds())
 	}()
 
-	worker, err := h.selector.SelectWorker(req.Model)
+	routePrompt := genPrompt
+	if key := c.GetHeader("X-Session-Affinity"); key != "" {
+		routePrompt = key
+	}
+	worker, err := h.selector.SelectWorker(req.Model, routePrompt)
 	if err != nil {
 		statusCode, typ, code := selectErrorStatus(err)
 		if errors.Is(err, scheduler.ErrAdmissionRejected) {
@@ -236,7 +245,7 @@ func (h *Handler) completions(c *gin.Context) {
 	defer h.observeLatency(worker.ID, start)
 	h.metrics.IncAdmitted(req.Model)
 
-	genReq := toWorkerRequest(req.Model, prompt, req.Temperature, req.TopP, req.MaxTokens)
+	genReq := toWorkerRequest(req.Model, genPrompt, req.Temperature, req.TopP, req.MaxTokens)
 	includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
 
 	if req.Stream {

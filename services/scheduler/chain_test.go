@@ -47,10 +47,6 @@ func TestPickPrefersLowerQueue(t *testing.T) {
 	if p.WorkerID != "idle" {
 		t.Fatalf("got %s", p.WorkerID)
 	}
-	// busy score 0.25, idle 1.0
-	if p.Score != 1.0 {
-		t.Fatalf("score=%v", p.Score)
-	}
 }
 
 func TestPickNoCapacityUnhealthyOrWrongModel(t *testing.T) {

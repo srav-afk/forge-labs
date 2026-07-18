@@ -30,7 +30,7 @@ type staticSelector struct {
 	w *SelectedWorker
 }
 
-func (s staticSelector) SelectWorker(string) (*SelectedWorker, error) { return s.w, nil }
+func (s staticSelector) SelectWorker(string, string) (*SelectedWorker, error) { return s.w, nil }
 func (s staticSelector) ListModels() []modelObject {
 	return []modelObject{{ID: "llama3.2", Object: "model", Created: 1, OwnedBy: "forge"}}
 }

@@ -7,10 +7,12 @@ import (
 )
 
 type Metrics struct {
-	dispatched *prometheus.CounterVec
-	filtered   *prometheus.CounterVec
-	ewma       *prometheus.GaugeVec
-	score      *prometheus.GaugeVec
+	dispatched  *prometheus.CounterVec
+	filtered    *prometheus.CounterVec
+	ewma        *prometheus.GaugeVec
+	score       *prometheus.GaugeVec
+	affinityHit prometheus.Counter
+	decisions   prometheus.Counter
 }
 
 func NewMetrics(reg *observability.Registry) *Metrics {
@@ -31,8 +33,16 @@ func NewMetrics(reg *observability.Registry) *Metrics {
 			Name: "forge_scheduler_score",
 			Help: "Composite scheduler score of the last pick per worker",
 		}, []string{"worker_id"}),
+		affinityHit: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "forge_affinity_hits_total",
+			Help: "Routing decisions that matched HRW-preferred worker (routing consistency, not true cache hit)",
+		}),
+		decisions: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "forge_routing_decisions_total",
+			Help: "Total routing decisions considered for affinity hit-rate",
+		}),
 	}
-	reg.MustRegister(m.dispatched, m.filtered, m.ewma, m.score)
+	reg.MustRegister(m.dispatched, m.filtered, m.ewma, m.score, m.affinityHit, m.decisions)
 	return m
 }
 
@@ -62,4 +72,18 @@ func (m *Metrics) SetScore(workerID string, score float64) {
 		return
 	}
 	m.score.WithLabelValues(workerID).Set(score)
+}
+
+func (m *Metrics) IncAffinityHit() {
+	if m == nil {
+		return
+	}
+	m.affinityHit.Inc()
+}
+
+func (m *Metrics) IncRoutingDecision() {
+	if m == nil {
+		return
+	}
+	m.decisions.Inc()
 }

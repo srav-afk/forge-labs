@@ -20,24 +20,30 @@ func NewChain(filters []Filter, scorers []WeightedScorer) *Chain {
 type ChainConfig struct {
 	WeightLoad     float64
 	WeightLatency  float64
+	WeightAffinity float64
 	LatencyRefMs   float64
 	AdmissionLimit int
+	AffinityWindow int
+	AffinityBlock  int
 	Metrics        *Metrics
 }
 
 func DefaultChain() *Chain {
 	return NewConfiguredChain(ChainConfig{
-		WeightLoad:     0.8,
+		WeightLoad:     0.6,
 		WeightLatency:  0.2,
+		WeightAffinity: 0.2,
 		LatencyRefMs:   100,
 		AdmissionLimit: 4,
+		AffinityWindow: 1024,
+		AffinityBlock:  64,
 	})
 }
 
 func NewConfiguredChain(cfg ChainConfig) *Chain {
-	wl, wlat := cfg.WeightLoad, cfg.WeightLatency
-	if wl <= 0 && wlat <= 0 {
-		wl, wlat = 0.8, 0.2
+	wl, wlat, waff := cfg.WeightLoad, cfg.WeightLatency, cfg.WeightAffinity
+	if wl <= 0 && wlat <= 0 && waff <= 0 {
+		wl, wlat, waff = 0.6, 0.2, 0.2
 	}
 	filters := []Filter{
 		HealthFilter{Metrics: cfg.Metrics},
@@ -46,13 +52,21 @@ func NewConfiguredChain(cfg ChainConfig) *Chain {
 	if cfg.AdmissionLimit > 0 {
 		filters = append(filters, AdmissionFilter{Limit: cfg.AdmissionLimit, Metrics: cfg.Metrics})
 	}
-	return NewChain(
-		filters,
-		[]WeightedScorer{
-			{Scorer: LeastLoaded{}, Weight: wl},
-			{Scorer: NewLatencyScorer(cfg.LatencyRefMs), Weight: wlat},
-		},
-	)
+	scorers := []WeightedScorer{
+		{Scorer: LeastLoaded{}, Weight: wl},
+		{Scorer: NewLatencyScorer(cfg.LatencyRefMs), Weight: wlat},
+	}
+	if waff > 0 {
+		scorers = append(scorers, WeightedScorer{
+			Scorer: NewAffinityScorer(cfg.AffinityWindow, cfg.AffinityBlock),
+			Weight: waff,
+		})
+	}
+	return NewChain(filters, scorers)
+}
+
+type preparer interface {
+	Prepare(ctx context.Context, req *Request, candidates []Candidate)
 }
 
 type PickResult struct {
@@ -70,6 +84,12 @@ func (ch *Chain) Pick(ctx context.Context, req *Request, candidates []Candidate)
 				return PickResult{}, ErrAdmissionRejected
 			}
 			return PickResult{}, ErrNoCapacity
+		}
+	}
+
+	for _, ws := range ch.Scorers {
+		if p, ok := ws.Scorer.(preparer); ok {
+			p.Prepare(ctx, req, surviving)
 		}
 	}
 
@@ -112,6 +132,10 @@ func (ch *Chain) PickWithMetrics(ctx context.Context, req *Request, candidates [
 	}
 	if metrics != nil {
 		metrics.SetScore(p.WorkerID, p.Score)
+		metrics.IncRoutingDecision()
+		if req != nil && req.PreferredWorker != "" && p.WorkerID == req.PreferredWorker {
+			metrics.IncAffinityHit()
+		}
 	}
 	return p, nil
 }
