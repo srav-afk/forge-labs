@@ -20,10 +20,13 @@ func WorkerDefaults() map[string]any {
 		"heartbeat.ttl":        "6s",
 		"worker.id":            "mac-studio-01",
 		"worker.endpoint":      "127.0.0.1:50051",
+		"worker.grpc.addr":     ":50051",
 		"worker.runtime":       "RUNTIME_KIND_OLLAMA",
 		"worker.model.base":    "qwen3:8b",
 		"worker.model.context": 32768,
 		"worker.ready":         true,
+		"ollama.url":           "http://127.0.0.1:11434",
+		"ollama.keep.alive":    "5m",
 		"worker.capabilities": map[string]string{
 			"accelerator":    "apple-m3-pro",
 			"quantization":   "Q4_K_M",

@@ -3,6 +3,7 @@ version: '3'
 tasks:
   gen:
     desc: Generate Go code from proto with buf
+    aliases: [buf:gen]
     cmds:
       - buf generate
 
@@ -16,6 +17,12 @@ tasks:
     deps: [gen]
     cmds:
       - go build ./...
+
+  worker:run:
+    desc: Run forge-worker against local config
+    deps: [gen]
+    cmds:
+      - go run ./cmd/forge-worker
 
   migrate-diff:
     desc: 'Generate a migration from the GORM models (usage: task migrate-diff -- <name>)'

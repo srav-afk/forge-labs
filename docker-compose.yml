@@ -73,6 +73,12 @@ services:
     environment:
       FORGE_CONTROLPLANE_GRPC: forge-controlplane:8081
       FORGE_REDIS_URL: redis://redis:6379/0
-    ports: ["9091:9091"]
+      FORGE_WORKER_GRPC_ADDR: ":50051"
+      FORGE_WORKER_ENDPOINT: "forge-worker:50051"
+      FORGE_OLLAMA_URL: http://host.docker.internal:11434
+      FORGE_OLLAMA_KEEP_ALIVE: 5m
+    ports: ["9091:9091", "50051:50051"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - forge-controlplane
